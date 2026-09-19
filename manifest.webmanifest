@@ -1,0 +1,17 @@
+{
+  "name": "个人AI外贸工作台 V3 免费版",
+  "short_name": "外贸工作台",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4fbf6",
+  "theme_color": "#4f9f68",
+  "description": "电子元器件外贸客户、报价、PI、跟进与云同步工作台",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
