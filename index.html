@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#4f9f68">
-  <meta name="description" content="个人AI外贸工作台 V3 免费版 免费版 云同步版">
+  <meta name="description" content="个人AI外贸工作台 V3.1.2 免费版 云同步版">
   <link rel="manifest" href="./manifest.webmanifest">
-  <title>个人AI外贸工作台 V3 免费版 免费版</title>
+  <title>个人AI外贸工作台 V3.1.2 免费版</title>
   <style>
     :root{
       --bg:#f4fbf6;--panel:#fff;--soft:#eef9f1;--primary:#4f9f68;--primary-dark:#34744c;
@@ -45,6 +45,8 @@
     .login{min-height:100vh;display:grid;place-items:center;padding:20px;background:linear-gradient(135deg,#e7f6eb,#f9fcfa)}.login-card{width:min(430px,94vw);background:#fff;border:1px solid var(--border);border-radius:20px;padding:26px;box-shadow:0 25px 70px rgba(41,75,51,.13);text-align:center}.login-card .big-logo{width:68px;height:68px;border-radius:20px;background:var(--primary);color:white;display:grid;place-items:center;font-size:24px;font-weight:900;margin:0 auto 14px}.login-card h1{font-size:23px;margin:0}.login-card p{color:var(--muted);font-size:12px;line-height:1.7}.login-card button{width:100%;margin-top:12px}
     .sync-dot{width:8px;height:8px;border-radius:50%;background:#9aa69e;display:inline-block}.sync-dot.ok{background:#4a9761}.sync-dot.busy{background:#d5a13d}.sync-dot.err{background:#ca5a5a}
     .chat{height:430px;border:1px solid var(--border);border-radius:12px;display:grid;grid-template-rows:1fr auto;overflow:hidden}.chat-log{overflow:auto;padding:12px;background:#fbfefc}.msg{max-width:84%;padding:9px 11px;margin-bottom:8px;border-radius:10px;font-size:11px;line-height:1.7;white-space:pre-wrap}.msg.ai{background:var(--soft)}.msg.user{margin-left:auto;background:var(--primary);color:#fff}.chat-input{display:grid;grid-template-columns:1fr auto;gap:8px;padding:9px;border-top:1px solid var(--border)}.chat-input textarea{resize:none;border:1px solid var(--border);border-radius:9px;padding:9px}
+
+    .country-manage{display:grid;gap:10px}.country-select-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.country-select-row select{min-width:260px;max-width:460px;border:1px solid var(--border);border-radius:10px;padding:9px;background:#fff}.country-chips{display:flex;gap:8px;flex-wrap:wrap}.country-chip{display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:#f8fcf9;border-radius:999px;padding:6px 8px 6px 11px;font-size:10px}.country-chip b{font-size:11px}.country-chip em{font-style:normal;color:var(--muted)}.country-chip span{color:var(--muted)}.country-chip .holiday-error{color:var(--danger)}.chip-btn{border:0;background:#eaf5ed;color:var(--primary-dark);width:24px;height:24px;border-radius:50%;padding:0}.chip-btn.danger{background:#fff0f0;color:var(--danger)}
     @media(max-width:1000px){.cols-4{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:820px){.app{grid-template-columns:1fr}.sidebar{position:fixed;left:0;top:0;width:min(82vw,290px);transform:translateX(-105%);transition:.22s;box-shadow:10px 0 30px rgba(39,72,49,.15)}.sidebar.open{transform:none}.menu{display:block}.content{padding:11px}.cols-3,.cols-2{grid-template-columns:1fr}.account-name{display:none}}
     @media(max-width:540px){.cols-4{grid-template-columns:1fr}.page-head{flex-direction:column}.form-grid{grid-template-columns:1fr}.field.full{grid-column:auto}.page-head h2{font-size:20px}}
@@ -56,7 +58,7 @@
 <section id="loginScreen" class="login">
   <div class="login-card">
     <div class="big-logo">AI</div>
-    <h1>个人AI外贸工作台 V3 免费版 免费版</h1>
+    <h1>个人AI外贸工作台 V3.1.2 免费版</h1>
     <p>电脑和手机使用同一个网址。登录同一个 Google 账号后，客户、报价、PI、历史沟通、任务和附件自动同步。</p>
     <button class="btn primary" id="googleLoginBtn">使用 Google 登录</button>
     <div class="notice" style="margin-top:14px;text-align:left">
@@ -68,7 +70,7 @@
 <!-- 主应用 -->
 <div id="workspaceApp" class="app" style="display:none">
   <aside class="sidebar" id="sidebar">
-    <div class="brand"><div class="logo">AI</div><div><h1>外贸工作台 V3 免费版</h1><p>云同步 · 手机/电脑共用</p></div></div>
+    <div class="brand"><div class="logo">AI</div><div><h1>外贸工作台 V3.1.2 免费版</h1><p>云同步 · 手机/电脑共用</p></div></div>
     <nav class="nav">
       <button class="active" data-page="dashboard">🏠 首页</button>
       <button data-page="clients">👥 客户中心</button>
@@ -107,7 +109,7 @@
       </section>
 
       <section class="page" id="page-clients">
-        <div class="page-head"><div><h2>客户中心</h2><p>客户是所有报价、PI、沟通、附件和跟进的核心。</p></div><button class="btn primary" onclick="openForm('client')">＋ 新增客户</button></div>
+        <div class="page-head"><div><h2>客户中心</h2><p>客户是所有报价、PI、沟通、附件和跟进的核心。</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn soft" id="openExcelImportBtn">📥 Excel拖入导入</button><button class="btn primary" onclick="openForm('client')">＋ 新增客户</button></div></div>
         <div class="toolbar"><input id="clientFilter" placeholder="筛选公司/国家/联系人"><select id="clientStatusFilter"><option value="">全部状态</option></select></div>
         <div class="card"><div class="table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>联系人</th><th>状态</th><th>等级</th><th>下次跟进</th><th>操作</th></tr></thead><tbody id="clientTable"></tbody></table></div></div>
       </section>
@@ -133,7 +135,13 @@
       </section>
 
       <section class="page" id="page-holidays">
-        <div class="page-head"><div><h2>全球节假日</h2><p>录入重点市场节假日并提前提醒。</p></div><button class="btn primary" onclick="openForm('holiday')">＋ 新增节假日</button></div>
+        <div class="page-head"><div><h2>全球节假日</h2><p>只需添加国家，系统会自动同步今年和明年的公共节假日，并每天自动检查更新。</p></div><button class="btn soft" onclick="openForm('holiday')">＋ 手动补充特殊节日</button></div>
+        <div class="card country-manage" style="margin-bottom:13px">
+          <div class="card-head"><h3>关注国家</h3><span id="holidaySyncStatus" class="item-meta">添加国家后自动同步</span></div>
+          <div class="country-select-row"><select id="holidayCountrySelect"><option value="">选择国家…</option></select><button class="btn primary" id="addHolidayCountryBtn">＋ 添加国家并自动同步</button><button class="btn" id="refreshAllHolidaysBtn">↻ 立即更新全部</button></div>
+          <div id="holidayCountryChips" class="country-chips"></div>
+          <div class="notice">以后不需要逐条手工添加节日：添加国家后会自动同步公共节假日；每天第一次打开工作台会自动检查更新。新增客户或 Excel 批量导入客户时，如果“国家”能被识别，也会自动加入该国家的节假日同步。手动补充仅用于城市/地区节日或特殊放假安排。</div>
+        </div>
         <div class="card"><div class="table-wrap"><table><thead><tr><th>国家</th><th>节日</th><th>日期</th><th>提前提醒</th><th>操作</th></tr></thead><tbody id="holidayTable"></tbody></table></div></div>
       </section>
 
@@ -209,10 +217,28 @@
   </div>
 </div>
 
+<!-- Excel 客户批量导入 -->
+<div class="modal-bg" id="excelImportModal">
+  <div class="modal" style="width:min(980px,97vw)">
+    <div class="modal-head"><div><h3>Excel 拖入导入客户</h3><div class="item-meta">支持 .xlsx / .xls / .csv，默认读取第一个工作表并自动识别中英文表头。</div></div><button class="close" onclick="closeModal('excelImportModal')">×</button></div>
+    <div class="modal-body">
+      <div class="excel-drop" id="excelDropZone">
+        <b>把客户 Excel 直接拖到这里</b>
+        <span>或点击选择文件 · 支持 .xlsx / .xls / .csv<br>可识别：客户名称、国家、联系人、Email、电话、WhatsApp、官网、状态、等级、下次跟进、备注等。</span>
+        <input id="excelFileInput" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" hidden>
+      </div>
+      <div id="excelImportStatus" class="notice" style="margin-top:12px">尚未选择文件。</div>
+      <div id="excelPreview" class="excel-preview"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal('excelImportModal')">取消</button><button class="btn primary" id="excelImportBtn" disabled>导入到云端</button></div>
+  </div>
+</div>
+
 <!-- 帮助弹窗 -->
 <div class="modal-bg" id="helpModal"><div class="modal" style="width:min(560px,96vw)"><div class="modal-head"><h3>使用说明</h3><button class="close" onclick="closeModal('helpModal')">×</button></div><div class="modal-body" id="helpBody"></div></div></div>
 
 <!-- Firebase 配置与主程序 -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script type="module" src="./app.js"></script>
 </body>
 </html>
