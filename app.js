@@ -830,10 +830,23 @@ function clientDevelopmentInfo(c) {
     var stage = touches === 0 ? "待开发" : ("待" + label);
     return { active: true, rot: rot, stage: stage, action: "outreach", actionLabel: label, dueDate: due, priority: (nextNumber >= limit || c.grade === "A") ? "high" : "normal", note: "当前联系人：" + contactLabel(ct) + " · 已联系 " + touches + "/" + limit + " 次" };
 }
+function rfqIsPendingQuote(r) {
+    var st = String((r && r.status) || "待报价");
+    return ["待补资料", "待报价", "核价中", "找货中", "部分报价"].includes(st);
+}
+function rfqDisplayStatus(r) {
+    var st = String((r && r.status) || "待报价");
+    return st === "找货中" ? "核价中" : st;
+}
+function rfqQuoteDueDate(r) {
+    if (!r) return "";
+    return r.expectedQuoteDate || r.nextFollowUp || (r.requestDate ? addDays(r.requestDate, state.settings.rfqFollowDays || 2) : "");
+}
 function getFollowups(opts) {
     opts = opts || {};
     var cutoff = opts.throughDate || todayISO();
     var includeWaiting = !!opts.includeWaiting;
+    var includePendingQuote = !!opts.includePendingQuote;
     var out = [];
     var weekend = isWeekend() && !state.settings.weekendFollow;
     state.orders.forEach(function (o) {
@@ -841,10 +854,20 @@ function getFollowups(opts) {
             out.push({ type: "order", id: o.id, clientId: o.clientId, priority: "high", category: "business", title: clientName(o.clientId) + " · " + (o.piNo || "PI"), meta: (o.paymentStatus || "待付款") + " · " + (o.amount || 0) + " " + (o.currency || state.settings.currency), stage: "PI付款" });
     });
     state.rfqs.forEach(function (r) {
-        var due = r.nextFollowUp || (r.requestDate ? addDays(r.requestDate, state.settings.rfqFollowDays || 2) : "");
-        if (due && due <= cutoff && !["已全部报价", "客户取消", "已结束"].includes(r.status || "")) {
-            var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
-            out.push({ type: "rfq", id: r.id, clientId: r.clientId, priority: overdue >= 2 ? "high" : "normal", category: "business", title: clientName(r.clientId) + " · RFQ " + (r.rfqNo || r.subject || "询价"), meta: (r.status || "待处理") + " · " + (r.itemCount || 0) + "项 · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "RFQ处理", dueDate: due });
+        var status = rfqDisplayStatus(r);
+        var pendingQuote = rfqIsPendingQuote(r);
+        var waitingFeedback = status === "等待客户反馈";
+        var due = pendingQuote ? rfqQuoteDueDate(r) : (r.nextFollowUp || "");
+        var active = pendingQuote || waitingFeedback;
+        var show = active && ((due && due <= cutoff) || (pendingQuote && includePendingQuote) || (waitingFeedback && includeWaiting));
+        if (show) {
+            var overdue = due ? Math.max(0, daysBetween(due, todayISO()) || 0) : 0;
+            var stage = pendingQuote ? (overdue ? "报价逾期" : status) : "等待回复";
+            var meta = status + " · " + (r.itemCount || 0) + "项";
+            if (pendingQuote && due) meta += " · 预计报价 " + fmtDate(due);
+            if (overdue) meta += " · 逾期" + overdue + "天";
+            else if (due === todayISO()) meta += " · 今天到期";
+            out.push({ type: "rfq", id: r.id, clientId: r.clientId, priority: overdue >= 1 || status === "待补资料" ? "high" : "normal", category: "business", title: clientName(r.clientId) + " · RFQ " + (r.rfqNo || r.subject || "询价"), meta: meta, stage: stage, dueDate: due, isPendingQuote: pendingQuote });
         }
     });
     state.samples.forEach(function (smp) {
@@ -902,6 +925,10 @@ function getFollowups(opts) {
         x.isToday = x.dueDate === todayISO();
         x.isWaiting = x.action === "wait" || String(x.stage || "").indexOf("等待回复") >= 0;
         x.isBounce = String(x.stage || "").indexOf("退信") >= 0 || String(x.meta || "").indexOf("退信") >= 0;
+        if (x.type === "rfq" && typeof x.isPendingQuote === "undefined") {
+            var rr = state.rfqs.find(function (r) { return r.id === x.id; });
+            x.isPendingQuote = rfqIsPendingQuote(rr);
+        }
     });
     var rank = { high: 3, normal: 2, long: 1 }, map = new Map();
     out.forEach(function (x) { var k = x.type + ":" + x.id; if (!map.has(k) || rank[x.priority] > rank[map.get(k).priority]) map.set(k, x); });
@@ -976,6 +1003,18 @@ $("clientStatusFilter").addEventListener("change", function () { clientPage = 1;
 (_a = $("clientOwnerFilter")) === null || _a === void 0 ? void 0 : _a.addEventListener("change", function () { clientPage = 1; renderClients(); });
 (_b = $("clientOurCompanyFilter")) === null || _b === void 0 ? void 0 : _b.addEventListener("change", function () { clientPage = 1; renderClients(); });
 function followupActionHtml(x) {
+    if (x.type === "rfq" && x.isPendingQuote) {
+        var r = state.rfqs.find(function (z) { return z.id === x.id; });
+        if (!r) return "";
+        var st = rfqDisplayStatus(r), btns = [];
+        if (st === "待报价" || st === "待补资料") btns.push("<button class=\"btn small primary\" onclick=\"event.stopPropagation();setRfqWorkflowStatus('" + r.id + "','核价中')\">开始核价</button>");
+        if (st === "核价中") btns.push("<button class=\"btn small\" onclick=\"event.stopPropagation();setRfqWorkflowStatus('" + r.id + "','部分报价')\">部分完成</button>");
+        if (st === "部分报价" || st === "核价中") btns.push("<button class=\"btn small primary\" onclick=\"event.stopPropagation();setRfqWorkflowStatus('" + r.id + "','已全部报价')\">已报价</button>");
+        if (st !== "待补资料") btns.push("<button class=\"btn small\" onclick=\"event.stopPropagation();setRfqWorkflowStatus('" + r.id + "','待补资料')\">待补资料</button>");
+        btns.push("<button class=\"btn small\" onclick=\"event.stopPropagation();postponeRfqQuote('" + r.id + "')\">延后</button>");
+        btns.push("<button class=\"btn small danger\" onclick=\"event.stopPropagation();setRfqWorkflowStatus('" + r.id + "','无法报价')\">无法报价</button>");
+        return "<div class=\"follow-actions\">" + btns.join("") + "</div>";
+    }
     if (x.type !== "client" || x.category !== "development") return "";
     var c = state.clients.find(function (z) { return z.id === x.id; });
     if (!c) return "";
@@ -990,6 +1029,33 @@ function followupActionHtml(x) {
     if (dev.action !== "edit" && dev.action !== "switch") btns.push("<button class=\"btn small\" onclick=\"event.stopPropagation();postponeClientFollowup('" + c.id + "')\">延后</button>");
     return btns.length ? "<div class=\"follow-actions\">" + btns.join("") + "</div>" : "";
 }
+window.setRfqWorkflowStatus = async function (id, status) {
+    var r = state.rfqs.find(function (z) { return z.id === id; });
+    if (!r) return;
+    var patch = { status: status, updatedAt: serverTimestamp() };
+    if (["待报价", "待补资料", "核价中", "部分报价"].includes(status)) {
+        patch.expectedQuoteDate = r.expectedQuoteDate || addDays(todayISO(), state.settings.rfqFollowDays || 2);
+        patch.nextFollowUp = patch.expectedQuoteDate;
+    }
+    if (status === "已全部报价") {
+        patch.nextFollowUp = addDays(todayISO(), state.settings.quoteFollowDays || 5);
+        if (r.clientId) {
+            try { await updateDoc(doc(db, "users", currentUser.uid, "clients", r.clientId), { status: "已报价", nextFollowUp: patch.nextFollowUp, updatedAt: serverTimestamp() }); } catch (e) { console.warn(e); }
+        }
+    }
+    if (status === "无法报价") patch.nextFollowUp = addDays(todayISO(), 14);
+    await updateDoc(doc(db, "users", currentUser.uid, "rfqs", id), patch);
+};
+window.postponeRfqQuote = async function (id) {
+    var r = state.rfqs.find(function (z) { return z.id === id; });
+    if (!r) return;
+    var cur = rfqQuoteDueDate(r) || addDays(todayISO(), state.settings.rfqFollowDays || 2);
+    var date = prompt("新的预计报价日期（YYYY-MM-DD）：", cur);
+    if (date === null) return;
+    date = String(date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert("日期格式请填写 YYYY-MM-DD，例如 2026-09-23"); return; }
+    await updateDoc(doc(db, "users", currentUser.uid, "rfqs", id), { expectedQuoteDate: date, nextFollowUp: date, updatedAt: serverTimestamp() });
+};
 function renderFollowupItem(x) {
     var stage = x.stage ? " <span class=\"badge follow-stage " + (x.priority === "high" ? "red" : x.priority === "long" ? "green" : "orange") + "\">" + esc(x.stage) + "</span>" : "";
     var due = "";
@@ -1029,7 +1095,7 @@ window.applyFollowQuick = function (v) {
     renderFollowups();
 };
 function renderFollowups() {
-    var all = getFollowups({ throughDate: endOfWeekISO(), includeWaiting: true });
+    var all = getFollowups({ throughDate: endOfWeekISO(), includeWaiting: true, includePendingQuote: true });
     var owners = Array.from(new Set(all.map(function (x) { return x.ownerSalesperson; }).filter(Boolean))).sort();
     var companies = Array.from(new Set(all.map(function (x) { return x.ownerCompany; }).filter(Boolean))).sort();
     var countries = Array.from(new Set(all.map(function (x) { return x.country; }).filter(Boolean))).sort();
@@ -1058,12 +1124,13 @@ function renderFollowups() {
         overdue: base.filter(function (x) { return x.dueDate && x.dueDate < todayISO(); }).length,
         waiting: base.filter(function (x) { return x.isWaiting; }).length,
         bounce: base.filter(function (x) { return x.isBounce; }).length,
+        pendingQuote: base.filter(function (x) { return x.isPendingQuote; }).length,
         pi: base.filter(function (x) { return x.stage === "PI付款"; }).length,
         sample: base.filter(function (x) { return x.stage === "样品跟进"; }).length
     };
     if ($("followSummary")) {
         $("followSummary").innerHTML = [
-            ["today", "今天", summary.today], ["overdue", "已逾期", summary.overdue], ["waiting", "等待回复", summary.waiting], ["bounce", "退信", summary.bounce], ["", "PI待付款", summary.pi], ["", "样品待跟进", summary.sample]
+            ["today", "今天", summary.today], ["overdue", "已逾期", summary.overdue], ["waiting", "等待回复", summary.waiting], ["bounce", "退信", summary.bounce], ["pendingQuote", "待报价", summary.pendingQuote], ["", "PI待付款", summary.pi], ["", "样品待跟进", summary.sample]
         ].map(function (r) { return '<div class="follow-summary-card"' + (r[0] ? ' onclick="applyFollowQuick(\'' + r[0] + '\')"' : '') + '><div class="num">' + r[2] + '</div><div class="lbl">' + r[1] + '</div></div>'; }).join("");
     }
 
@@ -1073,6 +1140,7 @@ function renderFollowups() {
         if (time === "week") return !!x.dueDate && x.dueDate >= startOfWeekISO() && x.dueDate <= endOfWeekISO();
         if (time === "waiting") return !!x.isWaiting;
         if (time === "bounce") return !!x.isBounce;
+        if (time === "pendingQuote") return !!x.isPendingQuote;
         return true;
     });
     var dev = f.filter(function (x) { return x.category === "development"; });
@@ -1099,7 +1167,12 @@ function renderRFQs() {
     var el = $("rfqTable");
     if (!el)
         return;
-    el.innerHTML = rows.length ? rows.map(function (r) { return "<tr><td>".concat(esc(clientName(r.clientId)), "</td><td><b>").concat(esc(r.rfqNo || r.subject || "RFQ"), "</b><div class=\"item-meta\">").concat(esc(r.sourceFile || ""), "</div></td><td>").concat(fmtDate(r.requestDate), "</td><td>").concat(esc(r.itemCount || 0), "</td><td>").concat(badge(r.status || "待处理", ["已全部报价", "已结束"].includes(r.status) ? "green" : ["待报价", "部分报价"].includes(r.status) ? "orange" : ""), "</td><td>").concat(esc(r.customerNeed || r.notes || "—"), "</td><td>").concat(fmtDate(r.nextFollowUp), "</td><td><button class=\"btn small\" onclick=\"openForm('rfq','").concat(r.id, "')\">\u7F16\u8F91</button> <button class=\"btn small danger\" onclick=\"removeEntity('rfq','").concat(r.id, "')\">\u5220\u9664</button></td></tr>"); }).join("") : "<tr><td colspan=\"8\">".concat(empty("暂无 RFQ。收到客户询价后先登记 RFQ，再录入报价。"), "</td></tr>");
+    el.innerHTML = rows.length ? rows.map(function (r) {
+        var st = rfqDisplayStatus(r);
+        var due = rfqQuoteDueDate(r);
+        var overdue = rfqIsPendingQuote(r) && due && due < todayISO();
+        return "<tr><td>" + esc(clientName(r.clientId)) + "</td><td><b>" + esc(r.rfqNo || r.subject || "RFQ") + "</b><div class=\"item-meta\">" + esc(r.sourceFile || "") + "</div></td><td>" + fmtDate(r.requestDate) + "</td><td>" + esc(r.itemCount || 0) + "</td><td>" + badge(st, ["已全部报价", "已结束"].includes(st) ? "green" : ["待补资料", "待报价", "核价中", "部分报价", "找货中"].includes(st) ? (overdue ? "red" : "orange") : "") + "</td><td>" + esc(r.customerNeed || r.notes || "—") + "</td><td>" + (due ? (overdue ? '<span class=\"follow-due overdue\">逾期 ' + esc(fmtDate(due)) + '</span>' : esc(fmtDate(due))) : "—") + "</td><td>" + fmtDate(r.nextFollowUp) + "</td><td><button class=\"btn small\" onclick=\"openForm('rfq','" + r.id + "')\">编辑</button> <button class=\"btn small danger\" onclick=\"removeEntity('rfq','" + r.id + "')\">删除</button></td></tr>";
+    }).join("") : "<tr><td colspan=\"9\">" + empty("暂无 RFQ。收到客户询价后先登记 RFQ，再录入报价。") + "</td></tr>";
 }
 function inRange(date, days) { if (!date)
     return false; var d = parseDate(date); if (!d)
@@ -1205,7 +1278,7 @@ var schemas = {
         ["feedbackType", "反馈类型", "select", false, ["无回复", "价格高/目标价", "交期问题", "无库存", "品牌不接受", "需要样品", "样品测试", "等待项目", "已有供应商", "付款条件", "物流问题", "暂时无需求", "拒绝", "成交信号", "其他"]], ["customerFeedback", "客户反馈", "textarea"], ["nextAction", "下一步", "text"], ["nextFollowUp", "下次跟进", "date"]
     ],
     rfq: [
-        ["clientId", "客户", "client", true], ["rfqNo", "RFQ编号/主题", "text", true], ["requestDate", "收到询价日期", "date", true], ["itemCount", "型号/项目数量", "number"], ["parts", "主要型号（可多行/逗号分隔）", "textarea"], ["sourceFile", "原始RFQ文件名/链接", "text"], ["status", "状态", "select", false, ["待报价", "找货中", "部分报价", "已全部报价", "等待客户反馈", "客户取消", "已结束"]], ["customerNeed", "客户需求/重点", "textarea"], ["nextFollowUp", "下次跟进", "date"], ["notes", "备注", "textarea"]
+        ["clientId", "客户", "client", true], ["rfqNo", "RFQ编号/主题", "text", true], ["requestDate", "收到询价日期", "date", true], ["expectedQuoteDate", "预计报价日期", "date"], ["itemCount", "型号/项目数量", "number"], ["parts", "主要型号（可多行/逗号分隔）", "textarea"], ["sourceFile", "原始RFQ文件名/链接", "text"], ["status", "状态", "select", false, ["待补资料", "待报价", "核价中", "找货中", "部分报价", "已全部报价", "等待客户反馈", "无法报价", "客户取消", "已结束"]], ["customerNeed", "客户需求/重点", "textarea"], ["nextFollowUp", "下次跟进", "date"], ["notes", "备注", "textarea"]
     ],
     quote: [
         ["clientId", "客户", "client", true], ["partNo", "型号", "text", true], ["brand", "品牌", "text"], ["qty", "数量", "text"], ["targetPrice", "Target Price", "text"], ["quotePrice", "报价", "text"],
@@ -1256,7 +1329,8 @@ window.openForm = function (type, id, preset) {
         if (type === "rfq") {
             existing.requestDate = todayISO();
             existing.status = "待报价";
-            existing.nextFollowUp = addDays(todayISO(), state.settings.rfqFollowDays || 2);
+            existing.expectedQuoteDate = addDays(todayISO(), state.settings.rfqFollowDays || 2);
+            existing.nextFollowUp = existing.expectedQuoteDate;
         }
         if (type === "quote") {
             existing.status = "待报价";
@@ -1359,8 +1433,12 @@ function saveEntity() {
                         obj.paidAmount = Number(obj.paidAmount || 0);
                         obj.balanceDue = Number(obj.balanceDue || 0);
                     }
-                    if (editing.type === "rfq")
+                    if (editing.type === "rfq") {
                         obj.itemCount = Number(obj.itemCount || 0);
+                        if (obj.status === "找货中") obj.status = "核价中";
+                        if (rfqIsPendingQuote(obj) && !String(obj.expectedQuoteDate || "").trim()) obj.expectedQuoteDate = addDays(obj.requestDate || todayISO(), state.settings.rfqFollowDays || 2);
+                        if (rfqIsPendingQuote(obj) && !String(obj.nextFollowUp || "").trim()) obj.nextFollowUp = obj.expectedQuoteDate;
+                    }
                     if (editing.type === "holiday")
                         obj.remindDays = Number(obj.remindDays || 7);
                     if (editing.type === "client") {
@@ -1757,7 +1835,7 @@ function renderClientDetail() {
     var clientEmails = getClientEmails(c, { includeNotes: true }), rot = currentContactInfo(c), current = rot.current;
     $("clientSub").textContent = [c.country, c.city, (current === null || current === void 0 ? void 0 : current.name) || c.contact, (current === null || current === void 0 ? void 0 : current.email) || clientEmails[0]].filter(Boolean).join(" · ");
     var rotationText = rot.pending ? (rot.next ? "\u5EFA\u8BAE\u5207\u6362\u5230\uFF1A".concat(contactLabel(rot.next)) : "所有联系人已开发完，建议转沉睡客户") : (current ? "\u5F53\u524D\uFF1A".concat(contactLabel(current), " \u00B7 \u5DF2\u8054\u7CFB ").concat(current.touchCount || 0, "/").concat(rot.limit, " \u6B21") : "尚未设置开发联系人");
-    var currentStage = orders.find(function (x) { return !["已完成", "取消"].includes(x.orderStatus); }) ? "PI/订单" : samples.find(function (x) { return !["测试通过", "测试未通过", "已结束", "取消"].includes(x.status); }) ? "样品" : quotes.find(function (x) { return !["成交", "丢单", "暂停"].includes(x.status); }) ? "报价后跟进" : rfqs.find(function (x) { return !["已全部报价", "客户取消", "已结束"].includes(x.status); }) ? "RFQ处理" : comms.length ? "开发/沟通" : "新客户";
+    var currentStage = orders.find(function (x) { return !["已完成", "取消"].includes(x.orderStatus); }) ? "PI/订单" : samples.find(function (x) { return !["测试通过", "测试未通过", "已结束", "取消"].includes(x.status); }) ? "样品" : quotes.find(function (x) { return !["成交", "丢单", "暂停"].includes(x.status); }) ? "报价后跟进" : rfqs.find(function (x) { return !["已全部报价", "等待客户反馈", "无法报价", "客户取消", "已结束"].includes(x.status); }) ? "待报价/RFQ处理" : comms.length ? "开发/沟通" : "新客户";
     var nextRec = recommendNextStep(c.id);
     $("clientOverview").innerHTML = "<div class=\"summary-box\"><div class=\"card-head\"><h3>\u5BA2\u6237\u5F53\u524D\u72B6\u6001\u6458\u8981</h3>".concat(badge(c.grade ? "".concat(c.grade, "\u7EA7\u5BA2\u6237") : "未评级", c.grade === "A" ? "red" : c.grade === "B" ? "orange" : "green"), "</div><div class=\"summary-grid\"><div class=\"summary-kpi\"><div class=\"k\">\u5F53\u524D\u9636\u6BB5</div><div class=\"v\">").concat(esc(currentStage), "</div></div><div class=\"summary-kpi\"><div class=\"k\">\u5F53\u524D\u8054\u7CFB\u4EBA</div><div class=\"v\">").concat(esc(contactLabel(current) || "—"), "</div></div><div class=\"summary-kpi\"><div class=\"k\">\u6700\u8FD1\u52A8\u4F5C</div><div class=\"v\">").concat(esc((((_a = comms[0]) === null || _a === void 0 ? void 0 : _a.subject) || ((_b = quotes[0]) === null || _b === void 0 ? void 0 : _b.batchName) || ((_c = quotes[0]) === null || _c === void 0 ? void 0 : _c.partNo) || ((_d = rfqs[0]) === null || _d === void 0 ? void 0 : _d.rfqNo) || ((_e = samples[0]) === null || _e === void 0 ? void 0 : _e.partNo) || "暂无").slice(0, 60)), "</div></div><div class=\"summary-kpi\"><div class=\"k\">\u4E0B\u4E00\u6B65</div><div class=\"v\">").concat(esc(nextRec.title), "</div></div></div></div><div class=\"grid cols-2\"><div class=\"card\"><div class=\"item-meta\">\u57FA\u672C\u8D44\u6599</div><h3>").concat(esc(c.company || ""), "</h3><div class=\"item-meta\">\u56FD\u5BB6\uFF1A").concat(esc(c.country || "—"), " \u00B7 \u7B49\u7EA7\uFF1A").concat(esc(c.grade || "—"), " \u00B7 \u72B6\u6001\uFF1A").concat(esc(c.status || "—"), "</div><div class=\"item-meta\"><b>\u8DDF\u8FDB\u5F52\u5C5E\uFF1A</b>").concat(esc(assignmentLabel(c)), "</div><div class=\"item-meta\">\u90AE\u7BB1\uFF1A").concat(clientEmails.length ? clientEmails.map(function (e) { return esc(e); }).join("；") : "—", " \u00B7 WhatsApp\uFF1A").concat(esc(c.whatsapp || "—"), "</div></div><div class=\"card\"><div class=\"item-meta\">\u8054\u7CFB\u4EBA\u5F00\u53D1\u72B6\u6001</div><h3>").concat(esc(rotationText), "</h3><div class=\"item-meta\">\u6700\u540E\u8054\u7CFB\uFF1A").concat(fmtDate(c.lastContact), " \u00B7 \u4E0B\u6B21\u8DDF\u8FDB\uFF1A").concat(fmtDate(c.nextFollowUp), "</div><div style=\"margin-top:8px;display:flex;gap:7px;flex-wrap:wrap\"><button class=\"btn small primary\" onclick=\"openForm('communication',null,{clientId:'").concat(c.id, "'})\">\u8BB0\u5F55\u6C9F\u901A</button>").concat(current && !current.replied && !current.invalid ? " <button class=\"btn small\" onclick=\"recordOutreachTouch('".concat(c.id, "')\">\uFF0B\u8BB0\u5F55\u4E00\u6B21\u5F00\u53D1</button>") : "").concat(rot.pending ? " <button class=\"btn small danger\" onclick=\"switchToNextContact('".concat(c.id, "')\">\u27A1 \u5207\u6362\u4E0B\u4E00\u8054\u7CFB\u4EBA</button>") : "", " <button class=\"btn small\" onclick=\"openForm('rfq',null,{clientId:'").concat(c.id, "'})\">\u65B0\u589ERFQ</button> <button class=\"btn small\" onclick=\"openForm('quote',null,{clientId:'").concat(c.id, "'})\">\u65B0\u589E\u62A5\u4EF7</button></div></div></div>");
     var contactRows = rot.contacts.map(function (ct, i) { var currentFlag = i === rot.index, cls = currentFlag ? "current" : ct.replied ? "replied" : ct.invalid ? "invalid" : "", st = ct.replied ? "已回复" : ct.invalid ? "无效" : ct.status || "未开始", encoded = encodeURIComponent(ct.email); return "<div class=\"contact-row ".concat(cls, "\"><div class=\"contact-row-head\"><div><div class=\"contact-email\">").concat(esc(ct.email), " ").concat(currentFlag ? badge("当前", "green") : "", " ").concat(ct.isPrimary ? badge("主要联系人", "green") : "", "</div><div class=\"contact-meta\">").concat(esc([ct.name, ct.title].filter(Boolean).join(" · ") || "未填写姓名/职位"), "<br>\u5DF2\u8054\u7CFB ").concat(ct.touchCount || 0, " \u6B21 \u00B7 \u8FDE\u7EED\u672A\u56DE\u590D ").concat(ct.noReplyCount || 0, " \u6B21 \u00B7 \u6700\u540E\u8054\u7CFB ").concat(fmtDate(ct.lastContact), "</div></div><div>").concat(badge(st, ct.replied ? "green" : ct.invalid || ct.noReplyCount >= rot.limit ? "red" : "orange"), "</div></div><div class=\"contact-actions\">").concat(!currentFlag && !ct.invalid && !ct.replied ? "<button class=\"btn small\" onclick=\"setCurrentContact('".concat(c.id, "','").concat(encoded, "')\">\u8BBE\u4E3A\u5F53\u524D</button>") : "", "<button class=\"btn small\" onclick=\"openContactCommunication('").concat(c.id, "','").concat(encoded, "','\u6211\u8054\u7CFB\u5BA2\u6237')\">\u8BB0\u5F55\u6C9F\u901A</button>").concat(!ct.replied ? "<button class=\"btn small\" onclick=\"openContactCommunication('".concat(c.id, "','").concat(encoded, "','\u5BA2\u6237\u56DE\u590D')\">\u8BB0\u5F55\u56DE\u590D</button>") : "").concat(!ct.invalid && !ct.replied ? "<button class=\"btn small danger\" onclick=\"markContactInvalid('".concat(c.id, "','").concat(encoded, "')\">\u9000\u4FE1/\u65E0\u6548</button>") : "", "</div></div>"); }).join("");
@@ -1937,8 +2015,11 @@ function recommendNextStep(clientId) {
         return { title: inf.nextAction, reason: "\u4F9D\u636E\u6700\u8FD1\u5BA2\u6237\u53CD\u9988\uFF1A".concat((last.customerFeedback || last.content || last.subject || "客户已回复").slice(0, 160)), dueDate: inf.nextFollowUp, priority: feedbackSignals([last.customerFeedback, last.content].join(" ")).noNeed ? "普通" : "高" };
     }
     var openRfq = state.rfqs.filter(function (x) { return x.clientId === clientId; }).sort(function (a, b) { return (b.requestDate || "").localeCompare(a.requestDate || ""); })[0];
-    if (openRfq && !["已全部报价", "客户取消", "已结束"].includes(openRfq.status || ""))
-        return { title: "\u5904\u7406RFQ\uFF1A".concat(openRfq.rfqNo || "客户询价"), reason: "\u5F53\u524D\u72B6\u6001\uFF1A".concat(openRfq.status || "待报价", "\uFF0C\u5171 ").concat(openRfq.itemCount || 0, " \u9879\u3002\u5148\u5B8C\u6210\u627E\u8D27/\u62A5\u4EF7\uFF0C\u5E76\u8BB0\u5F55\u65E0\u6CD5\u62A5\u4EF7\u7684\u9879\u76EE\u539F\u56E0\u3002"), dueDate: openRfq.nextFollowUp || todayISO(), priority: "高" };
+    if (openRfq && rfqIsPendingQuote(openRfq)) {
+        var rfqDue = rfqQuoteDueDate(openRfq) || todayISO();
+        var rfqOverdue = rfqDue < todayISO();
+        return { title: (rfqOverdue ? "报价已逾期：" : "待报价：") + (openRfq.rfqNo || "客户询价"), reason: "当前状态：" + rfqDisplayStatus(openRfq) + "，共 " + (openRfq.itemCount || 0) + " 项；预计报价 " + fmtDate(rfqDue) + "。优先完成核价，无法报价的项目单独记录原因。", dueDate: rfqDue, priority: rfqOverdue ? "高" : "普通" };
+    }
     var openQuote = quotes.find(function (q) { return !["成交", "丢单", "暂停"].includes(q.status); });
     if (openQuote) {
         var due = openQuote.nextFollowUp || (openQuote.quoteDate ? addDays(openQuote.quoteDate, state.settings.quoteFollowDays || 5) : todayISO());
@@ -3532,7 +3613,7 @@ function exportBusinessExcel() {
     try {
         var wb_1 = XLSX.utils.book_new();
         var clients = state.clients.map(function (c) { return ({ 客户: c.company || "", 国家: c.country || "", 城市: c.city || "", 跟进业务员: c.ownerSalesperson || "", 我方公司: c.ownerCompany || "", 跟进邮箱: c.ownerEmail || "", 等级: c.grade || "", 状态: c.status || "", 客户类型: c.customerType || "", 行业: c.industry || "", 开发来源: c.source || "", 联系人: c.contact || "", 邮箱: getClientEmails(c, { includeNotes: true }).join("; "), 电话: c.phone || "", WhatsApp: c.whatsapp || "", 官网: c.website || "", 采购特点痛点: c.procurementPain || "", 付款习惯: c.paymentHabit || "", 物流习惯: c.logisticsHabit || "", 价格敏感度: c.priceSensitivity || "", 最后联系: c.lastContact || "", 下次跟进: c.nextFollowUp || "", 备注: c.notes || "" }); });
-        var rfqs = state.rfqs.map(function (r) { return ({ 日期: r.requestDate || "", 客户: clientName(r.clientId), RFQ: r.rfqNo || "", 型号数: r.itemCount || 0, 主要型号: r.parts || "", 状态: r.status || "", 客户需求: r.customerNeed || "", 原始文件: r.sourceFile || "", 下次跟进: r.nextFollowUp || "", 备注: r.notes || "" }); });
+        var rfqs = state.rfqs.map(function (r) { return ({ 日期: r.requestDate || "", 客户: clientName(r.clientId), RFQ: r.rfqNo || "", 型号数: r.itemCount || 0, 主要型号: r.parts || "", 状态: r.status || "", 客户需求: r.customerNeed || "", 预计报价日期: r.expectedQuoteDate || "", 原始文件: r.sourceFile || "", 下次跟进: r.nextFollowUp || "", 备注: r.notes || "" }); });
         var comms = state.communications.map(function (x) { return ({ 日期: x.date || "", 客户: clientName(x.clientId), 邮箱: x.contactEmail || "", 渠道: x.channel || "", 方向: x.direction || "", 主题: x.subject || "", 沟通内容: x.content || "", 反馈类型: x.feedbackType || "", 客户反馈: x.customerFeedback || "", 下一步: x.nextAction || "", 下次跟进: x.nextFollowUp || "" }); });
         var quotes_1 = [];
         state.quotes.forEach(function (q) {
@@ -3682,7 +3763,7 @@ document.addEventListener("click", function (e) { if (innerWidth <= 820 && !e.ta
 
 
 // ============================================================
-// V3.2.8：跟进中心多维筛选 + 今日/逾期/等待回复汇总
+// V3.2.9：待报价流程 + 预计报价日期 + 报价逾期提醒
 // ============================================================
 var rfqImportRows = [];
 var rfqImportFileName = "";
@@ -3738,6 +3819,8 @@ function resetRfqImport326() {
     rfqImportFileName = "";
     fillRfqClientOptions326();
     if ($("rfqImportDate")) $("rfqImportDate").value = todayISO();
+    if ($("rfqImportExpectedQuoteDate")) $("rfqImportExpectedQuoteDate").value = addDays(todayISO(), state.settings.rfqFollowDays || 2);
+    if ($("rfqImportWorkflowStatus")) $("rfqImportWorkflowStatus").value = "待报价";
     if ($("rfqImportNo")) $("rfqImportNo").value = "";
     if ($("rfqFileInput")) $("rfqFileInput").value = "";
     if ($("rfqImportStatus")) $("rfqImportStatus").textContent = "尚未选择文件。";
@@ -3824,6 +3907,9 @@ async function readRfqExcelFile326(file) {
             var clientId = $("rfqImportClient").value;
             if (!clientId) { alert("请先选择这张询价表属于哪个客户。"); return; }
             var requestDate = $("rfqImportDate").value || todayISO();
+            var expectedQuoteDate = $("rfqImportExpectedQuoteDate") ? $("rfqImportExpectedQuoteDate").value : addDays(requestDate, state.settings.rfqFollowDays || 2);
+            if (!expectedQuoteDate) expectedQuoteDate = addDays(requestDate, state.settings.rfqFollowDays || 2);
+            var workflowStatus = $("rfqImportWorkflowStatus") ? $("rfqImportWorkflowStatus").value : "待报价";
             var title = String($("rfqImportNo").value || "").trim();
             if (!title) title = rfqImportFileName.replace(/\.(xlsx|xls|csv)$/i, "") || ("RFQ " + requestDate);
             importBtn.disabled = true;
@@ -3838,9 +3924,10 @@ async function readRfqExcelFile326(file) {
                 items: rfqImportRows,
                 parts: parts,
                 sourceFile: rfqImportFileName,
-                status: "待报价",
+                status: workflowStatus,
+                expectedQuoteDate: expectedQuoteDate,
                 customerNeed: "Excel批量导入，共 " + rfqImportRows.length + " 个型号",
-                nextFollowUp: addDays(requestDate, state.settings.rfqFollowDays || 2),
+                nextFollowUp: expectedQuoteDate,
                 notes: "Excel批量导入询价：" + rfqImportFileName,
                 batchImport: true,
                 createdAt: serverTimestamp(),
