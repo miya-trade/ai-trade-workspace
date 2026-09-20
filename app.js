@@ -90,24 +90,24 @@ try { regionNames = new Intl.DisplayNames(["zh-CN"], {type:"region"}); } catch(e
 const normalizeCountryName = v => String(v||"").trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[\s._,'’()（）\-\/]+/g,"");
 const COUNTRY_ALIASES = {
   "俄国":"RU","俄罗斯":"RU","russia":"RU","russianfederation":"RU",
-  "白俄罗斯":"BY","belarus":"BY","byelorussia":"BY",
+  "白俄罗斯":"BY","belarus":"BY","byelorussia":"BY","bielorrussia":"BY",
   "土耳其":"TR","turkiye":"TR","türkiye":"TR","turkey":"TR",
-  "巴西":"BR","brazil":"BR",
+  "巴西":"BR","brazil":"BR","brasil":"BR",
   "印度尼西亚":"ID","印尼":"ID","indonesia":"ID",
-  "南非":"ZA","southafrica":"ZA",
+  "南非":"ZA","southafrica":"ZA","africadosul":"ZA",
   "阿联酋":"AE","阿拉伯联合酋长国":"AE","uae":"AE","unitedarabemirates":"AE",
   "斯里兰卡":"LK","srilanka":"LK",
   "乌克兰":"UA","ukraine":"UA",
   "中国":"CN","中国大陆":"CN","china":"CN","prc":"CN",
-  "美国":"US","美國":"US","usa":"US","us":"US","unitedstates":"US","unitedstatesofamerica":"US",
-  "英国":"GB","英國":"GB","uk":"GB","greatbritain":"GB","unitedkingdom":"GB",
-  "德国":"DE","德國":"DE","germany":"DE",
-  "法国":"FR","法國":"FR","france":"FR",
-  "意大利":"IT","义大利":"IT","italy":"IT",
+  "美国":"US","美國":"US","usa":"US","us":"US","unitedstates":"US","unitedstatesofamerica":"US","estadosunidos":"US",
+  "英国":"GB","英國":"GB","uk":"GB","greatbritain":"GB","unitedkingdom":"GB","reinounido":"GB",
+  "德国":"DE","德國":"DE","germany":"DE","alemanha":"DE",
+  "法国":"FR","法國":"FR","france":"FR","franca":"FR",
+  "意大利":"IT","义大利":"IT","italy":"IT","italia":"IT",
   "西班牙":"ES","spain":"ES",
   "葡萄牙":"PT","portugal":"PT",
-  "波兰":"PL","波蘭":"PL","poland":"PL",
-  "荷兰":"NL","荷蘭":"NL","netherlands":"NL","holland":"NL",
+  "波兰":"PL","波蘭":"PL","poland":"PL","polonia":"PL",
+  "荷兰":"NL","荷蘭":"NL","netherlands":"NL","holland":"NL","paisesbaixos":"NL",
   "比利时":"BE","比利時":"BE","belgium":"BE",
   "瑞典":"SE","sweden":"SE","挪威":"NO","norway":"NO","芬兰":"FI","芬蘭":"FI","finland":"FI","丹麦":"DK","丹麥":"DK","denmark":"DK","冰岛":"IS","冰島":"IS","iceland":"IS",
   "印度":"IN","india":"IN","日本":"JP","japan":"JP","韩国":"KR","韓國":"KR","southkorea":"KR","korea":"KR",
@@ -417,11 +417,11 @@ function renderClients(){
     return (!q||hay.includes(q))&&(!status||c.status===status);
   });
   $("clientTable").innerHTML=rows.length?rows.map(c=>`<tr>
-    <td><b>${esc(c.company||"未命名")}</b></td><td>${esc(c.country||"—")}</td><td>${esc(c.contact||"—")}</td>
-    <td>${badge(c.status||"—",["已成交","老客户"].includes(c.status)?"green":["PI","已报价","重点跟进"].includes(c.status)?"orange":"")}</td>
-    <td>${esc(c.grade||"—")}</td><td>${fmtDate(c.nextFollowUp)}</td>
-    <td><button class="btn small primary" onclick="openClient('${c.id}')">详情</button> <button class="btn small" onclick="openForm('client','${c.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('client','${c.id}')">删除</button></td>
-  </tr>`).join(""):`<tr><td colspan="7">${empty("还没有客户。")}</td></tr>`;
+    <td data-label="客户"><b>${esc(c.company||"未命名")}</b></td><td data-label="国家">${esc(c.country||"—")}</td><td data-label="联系人">${esc(c.contact||"—")}</td>
+    <td data-label="状态">${badge(c.status||"—",["已成交","老客户"].includes(c.status)?"green":["PI","已报价","重点跟进"].includes(c.status)?"orange":"")}</td>
+    <td data-label="等级">${esc(c.grade||"—")}</td><td data-label="下次跟进">${fmtDate(c.nextFollowUp)}</td>
+    <td data-label="操作"><button class="btn small primary" onclick="openClient('${c.id}')">详情</button> <button class="btn small" onclick="openForm('client','${c.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('client','${c.id}')">删除</button></td>
+  </tr>`).join(""):`<tr><td class="client-empty-cell" colspan="7">${empty("还没有客户。")}</td></tr>`;
 }
 $("clientFilter").addEventListener("input",renderClients);
 $("clientStatusFilter").addEventListener("change",renderClients);
@@ -532,6 +532,7 @@ async function saveEntity(){
   const fd=new FormData(form), obj={}; for(const [k,v] of fd.entries()) obj[k]=v;
   if(editing.type==="order") obj.amount=Number(obj.amount||0);
   if(editing.type==="holiday") obj.remindDays=Number(obj.remindDays||7);
+  if(editing.type==="client") canonicalizeClientCountry(obj);
   sync("busy","正在保存…");
   const key=pathFor(editing.type);
 
@@ -666,7 +667,7 @@ function generateFollowup(clientId){
 // ============================================================
 const excelAliases = {
   company:["公司名称","客户名称","公司","客户","company","company name","customer","customer name","client","client name"],
-  country:["国家","country","market"],
+  country:["国家","客户国家","所在国家","国家地区","国家/地区","国家或地区","country","country name","country/region","country region","region","market","市场","país","pais","país/região","pais/regiao","região","regiao","mercado"],
   city:["城市","city","location"],
   website:["官网","网站","网址","website","web","url","homepage"],
   grade:["客户等级","等级","级别","grade","level","rating"],
@@ -706,20 +707,106 @@ function normalizeStatus(v){
   const map={"待开发":"新客户","未开发":"新客户","已联系":"已开发","开发中":"已开发","已询价":"有询价","询价":"有询价","报价":"已报价","成交":"已成交","老客":"老客户","沉睡":"沉睡客户","暂停":"暂停开发","无效":"无效客户"};
   return map[s]||s;
 }
+function normalizeLooseText(v){
+  return String(v||"").trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[\u200B-\u200D\uFEFF]/g,"").replace(/&amp;/g,"&").replace(/\s+/g," ");
+}
+function normalizeCompanyKey(v){
+  return normalizeLooseText(v).replace(/[^a-z0-9\u4e00-\u9fff]+/g,"");
+}
+function normalizeEmailKey(v){ return normalizeLooseText(v).replace(/\s+/g,""); }
+function normalizePhoneKey(v){ return String(v||"").replace(/\D+/g,""); }
+function normalizeDomain(v){
+  let s=normalizeLooseText(v); if(!s) return "";
+  if(s.includes("@") && !s.includes("/")) s=s.split("@").pop();
+  s=s.replace(/^https?:\/\//,"").replace(/^www\./,"").split(/[\/?#]/)[0].replace(/:\d+$/,"");
+  return s;
+}
+const CCTLD_COUNTRY=[
+  [/\.(?:com\.)?br$/,"BR"],[/\.(?:com\.)?tr$/,"TR"],[/\.ru$/,"RU"],[/\.by$/,"BY"],[/\.(?:co\.)?za$/,"ZA"],[/\.(?:co\.)?id$/,"ID"],
+  [/\.(?:com\.)?cn$/,"CN"],[/\.lk$/,"LK"],[/\.ua$/,"UA"],[/\.ae$/,"AE"],[/\.de$/,"DE"],[/\.fr$/,"FR"],[/\.it$/,"IT"],[/\.es$/,"ES"],[/\.pt$/,"PT"],
+  [/\.pl$/,"PL"],[/\.nl$/,"NL"],[/\.se$/,"SE"],[/\.no$/,"NO"],[/\.fi$/,"FI"],[/\.dk$/,"DK"],[/\.is$/,"IS"],[/\.uk$/,"GB"],[/\.co\.uk$/,"GB"],
+  [/\.jp$/,"JP"],[/\.kr$/,"KR"],[/\.sg$/,"SG"],[/\.my$/,"MY"],[/\.th$/,"TH"],[/\.vn$/,"VN"],[/\.ph$/,"PH"],[/\.in$/,"IN"]
+];
+const PHONE_COUNTRY_PREFIXES=[["971","AE"],["375","BY"],["380","UA"],["94","LK"],["90","TR"],["55","BR"],["27","ZA"],["62","ID"],["86","CN"],["7","RU"]];
+function inferCountryCodeFromClient(c){
+  let code=resolveCountryCode(c?.country); if(code) return code;
+  const domain=normalizeDomain(c?.website||c?.email||"");
+  for(const [re,cc] of CCTLD_COUNTRY){ if(domain && re.test(domain)) return cc; }
+  let phone=String(c?.phone||c?.whatsapp||"").replace(/\D+/g,"");
+  if(phone.startsWith("00")) phone=phone.slice(2);
+  for(const [prefix,cc] of PHONE_COUNTRY_PREFIXES){ if(phone.startsWith(prefix)) return cc; }
+  const company=normalizeCountryName(c?.company||"");
+  if(company.includes("brasil")) return "BR";
+  return "";
+}
+function canonicalizeClientCountry(c){
+  const code=inferCountryCodeFromClient(c); if(code) c.country=countryDisplayName(code);
+  return c;
+}
+function countriesCompatible(a,b){
+  const ca=inferCountryCodeFromClient(a), cb=inferCountryCodeFromClient(b);
+  return !ca||!cb||ca===cb;
+}
+function clientIdentifiers(c){
+  return {
+    company:normalizeCompanyKey(c?.company), email:normalizeEmailKey(c?.email), domain:normalizeDomain(c?.website),
+    phone:normalizePhoneKey(c?.phone||c?.whatsapp), country:inferCountryCodeFromClient(c)
+  };
+}
+function sameClient(a,b){
+  const x=clientIdentifiers(a), y=clientIdentifiers(b);
+  if(x.email&&y.email&&x.email===y.email) return true;
+  if(x.domain&&y.domain&&x.domain===y.domain) return true;
+  if(x.company&&y.company&&x.company===y.company&&countriesCompatible(a,b)) return true;
+  if(x.company&&y.company&&x.company===y.company&&x.phone&&y.phone&&x.phone===y.phone) return true;
+  return false;
+}
+const STATUS_RANK={"新客户":1,"已开发":2,"已回复":3,"有询价":4,"已报价":5,"重点跟进":6,"PI":7,"已成交":8,"老客户":9,"长期维护":5,"沉睡客户":2,"暂停开发":0,"无效客户":-1};
+const GRADE_RANK={A:4,B:3,C:2,D:1};
+function appendUniqueNote(notes,line){
+  const base=String(notes||"").trim(); if(!line||base.includes(line)) return base;
+  return base?`${base}\n${line}`:line;
+}
+function mergeClientData(base,incoming,{fromExcel=false}={}){
+  const out={...base}; const src={...incoming}; canonicalizeClientCountry(src);
+  const fill=["country","city","website","contact","title","email","phone","whatsapp","linkedin","facebook","telegram","lastContact","nextFollowUp"];
+  fill.forEach(k=>{ if(!String(out[k]||"").trim()&&String(src[k]||"").trim()) out[k]=src[k]; });
+  if((GRADE_RANK[src.grade]||0)>(GRADE_RANK[out.grade]||0)) out.grade=src.grade;
+  if((STATUS_RANK[src.status]??0)>(STATUS_RANK[out.status]??0)) out.status=src.status;
+  let notes=out.notes||"";
+  const extras=[];
+  [["联系人","contact"],["职位","title"],["Email","email"],["电话","phone"],["WhatsApp","whatsapp"]].forEach(([label,k])=>{
+    const a=String(out[k]||"").trim(), b=String(src[k]||"").trim(); if(a&&b&&normalizeLooseText(a)!==normalizeLooseText(b)) extras.push(`${label}: ${b}`);
+  });
+  if(String(src.notes||"").trim()&&String(src.notes||"").trim()!==String(notes||"").trim()) notes=appendUniqueNote(notes,String(src.notes).trim());
+  if(extras.length) notes=appendUniqueNote(notes,`${fromExcel?"Excel补充资料":"合并补充资料"}：${extras.join("；")}`);
+  out.notes=notes;
+  if(src.country){
+    const cc=inferCountryCodeFromClient(src); if(cc) out.country=countryDisplayName(cc);
+  } else canonicalizeClientCountry(out);
+  return out;
+}
+function findClientMatch(target,list){ return list.find(x=>sameClient(target,x))||null; }
+function consolidateImportedRows(rows){
+  const out=[]; let merged=0;
+  rows.forEach(raw=>{
+    const c=canonicalizeClientCountry({...raw});
+    const hit=findClientMatch(c,out);
+    if(hit){ Object.assign(hit,mergeClientData(hit,c,{fromExcel:true})); merged++; }
+    else out.push(c);
+  });
+  return {rows:out,merged};
+}
 function rowToClient(headers,row){
   const obj={grade:"C",status:"新客户"};
   headers.forEach((h,i)=>{ const field=aliasLookup.get(normalizeHeader(h)); if(field && row[i]!==undefined && row[i]!==null) obj[field]=String(row[i]).trim(); });
   obj.company=String(obj.company||"").trim(); obj.grade=normalizeGrade(obj.grade); obj.status=normalizeStatus(obj.status);
   obj.lastContact=normalizeDateValue(obj.lastContact); obj.nextFollowUp=normalizeDateValue(obj.nextFollowUp);
+  canonicalizeClientCountry(obj);
   return obj;
 }
 function clientDupKey(c){
-  const company=String(c.company||"").trim().toLowerCase(), email=String(c.email||"").trim().toLowerCase(), website=String(c.website||"").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/\/$/,"");
-  const contact=String(c.contact||"").trim().toLowerCase(), phone=String(c.phone||"").trim().toLowerCase();
-  if(company&&email) return `ce:${company}|${email}`;
-  if(website) return `w:${website}`;
-  if(company&&(contact||phone)) return `cc:${company}|${contact}|${phone}`;
-  return company?`c:${company}`:"";
+  const x=clientIdentifiers(c); return x.email?`e:${x.email}`:x.domain?`w:${x.domain}`:x.company?`c:${x.company}`:"";
 }
 function showExcelStatus(text,kind=""){ const el=$("excelImportStatus"); el.textContent=text; el.style.color=kind==="err"?"#a44f4f":""; }
 function resetExcelImport(){ excelImportRows=[];excelImportFileName="";$("excelImportBtn").disabled=true;$("excelPreview").innerHTML="";showExcelStatus("尚未选择文件。");$("excelFileInput").value=""; }
@@ -764,21 +851,82 @@ async function readExcelFile(file){
 }
 $("excelImportBtn")?.addEventListener("click",async()=>{
   if(!excelImportRows.length)return;
-  const existing=new Set(state.clients.map(clientDupKey).filter(Boolean)), seen=new Set();
-  const toImport=[], duplicates=[];
-  excelImportRows.forEach(c=>{ const k=clientDupKey(c); if(k&&(existing.has(k)||seen.has(k))) duplicates.push(c); else { if(k)seen.add(k);toImport.push(c); } });
-  if(!toImport.length){alert(`没有需要导入的新客户。检测到 ${duplicates.length} 条重复记录。`);return}
-  if(!confirm(`准备导入 ${toImport.length} 家客户到云端${duplicates.length?`，自动跳过 ${duplicates.length} 条重复记录`:""}。确认继续吗？`))return;
-  sync("busy","正在批量导入客户…"); $("excelImportBtn").disabled=true;
+  const consolidated=consolidateImportedRows(excelImportRows);
+  const virtualExisting=state.clients.map(c=>({...c}));
+  const toCreate=[], toUpdate=new Map();
+  for(const incoming of consolidated.rows){
+    const hit=findClientMatch(incoming,virtualExisting);
+    if(hit){
+      const merged=mergeClientData(hit,incoming,{fromExcel:true}); Object.assign(hit,merged);
+      if(hit.id) toUpdate.set(hit.id,merged);
+    }else{
+      const c={...incoming}; toCreate.push(c); virtualExisting.push(c);
+    }
+  }
+  const msg=`准备处理 ${excelImportRows.length} 行：新增 ${toCreate.length} 家，合并/补充已有客户 ${toUpdate.size} 家${consolidated.merged?`，表内重复已合并 ${consolidated.merged} 行`:""}。确认写入云端吗？`;
+  if(!confirm(msg))return;
+  sync("busy","正在清洗并导入客户…"); $("excelImportBtn").disabled=true;
   try{
-    for(let i=0;i<toImport.length;i+=400){
+    const ops=[];
+    toCreate.forEach(c=>ops.push({kind:"set",ref:doc(refCollection("clients")),data:{...c,source:`Excel导入：${excelImportFileName}`,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}}));
+    for(const [id,c] of toUpdate) ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,"clients",id),data:{...c,source:`Excel合并更新：${excelImportFileName}`,updatedAt:serverTimestamp()}});
+    for(let i=0;i<ops.length;i+=350){
       const batch=writeBatch(db);
-      toImport.slice(i,i+400).forEach(c=>{ const r=doc(refCollection("clients")); batch.set(r,{...c,source:`Excel导入：${excelImportFileName}`,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}); });
+      ops.slice(i,i+350).forEach(op=>op.kind==="set"?batch.set(op.ref,op.data):batch.update(op.ref,op.data));
       await batch.commit();
     }
-    const countryAdded=await autoTrackCountriesFromNames(toImport.map(c=>c.country).filter(Boolean));
-    sync("ok","已自动同步"); alert(`导入完成：新增 ${toImport.length} 家客户${duplicates.length?`，跳过重复 ${duplicates.length} 条`:""}${countryAdded.length?`；并自动加入 ${countryAdded.length} 个国家的节假日同步`:""}。`); closeModal("excelImportModal");
+    const countryNames=[...toCreate,...toUpdate.values()].map(c=>c.country).filter(Boolean);
+    const countryAdded=await autoTrackCountriesFromNames(countryNames);
+    sync("ok","已自动同步");
+    alert(`处理完成：新增 ${toCreate.length} 家；合并/补充 ${toUpdate.size} 家${consolidated.merged?`；表内重复合并 ${consolidated.merged} 行`:""}${countryAdded.length?`；新增 ${countryAdded.length} 个国家节假日同步`:""}。`);
+    closeModal("excelImportModal");
   }catch(err){ console.error(err);sync("err","导入失败");$("excelImportBtn").disabled=false;alert("导入失败："+err.message); }
+});
+
+// V3.1.3：清理已经存在的重复客户，并补全可推断国家；关联记录自动改到保留客户
+$("cleanClientsBtn")?.addEventListener("click",async()=>{
+  if(!state.clients.length){alert("当前没有客户需要清理。");return}
+  const parent={}; const byId=new Map(state.clients.map(c=>[c.id,c]));
+  const find=id=>parent[id]===id?id:(parent[id]=find(parent[id]));
+  const union=(a,b)=>{a=find(a);b=find(b);if(a!==b)parent[b]=a};
+  state.clients.forEach(c=>parent[c.id]=c.id);
+  const buckets=new Map();
+  for(const c of state.clients){
+    const x=clientIdentifiers(c); const keys=[];
+    if(x.email) keys.push(`e:${x.email}`); if(x.domain) keys.push(`w:${x.domain}`); if(x.company) keys.push(`c:${x.company}`);
+    for(const key of keys){
+      const ids=buckets.get(key)||[];
+      for(const id of ids){ const other=byId.get(id); if(other&&sameClient(c,other)) union(c.id,id); }
+      ids.push(c.id); buckets.set(key,ids);
+    }
+  }
+  const groups=new Map(); state.clients.forEach(c=>{const r=find(c.id);(groups.get(r)||groups.set(r,[]).get(r)).push(c)});
+  const dups=[...groups.values()].filter(g=>g.length>1);
+  const inferable=state.clients.filter(c=>!resolveCountryCode(c.country)&&inferCountryCodeFromClient(c)).length;
+  if(!dups.length&&!inferable){alert("没有发现需要合并的重复客户，也没有可自动补全的国家。");return}
+  if(!confirm(`检测到 ${dups.reduce((n,g)=>n+g.length-1,0)} 条重复客户需要合并；另有约 ${inferable} 条客户可自动补全国家。\n\n系统会保留资料更完整的一条，并把报价、PI、沟通、任务、附件关联到保留客户。确认继续吗？`))return;
+  sync("busy","正在清理客户数据…");
+  try{
+    const relationSets=[state.communications,state.quotes,state.orders,state.tasks,state.files];
+    const ops=[]; const duplicateIds=new Set();
+    const completeness=c=>["country","city","website","contact","title","email","phone","whatsapp","linkedin","facebook","telegram","notes","nextFollowUp","lastContact"].reduce((n,k)=>n+(String(c[k]||"").trim()?1:0),0)+relationSets.reduce((n,arr)=>n+arr.filter(x=>x.clientId===c.id).length*2,0);
+    for(const group of dups){
+      const sorted=[...group].sort((a,b)=>completeness(b)-completeness(a)); const keeper=sorted[0]; let merged={...keeper};
+      for(const d of sorted.slice(1)){ merged=mergeClientData(merged,d); duplicateIds.add(d.id); }
+      canonicalizeClientCountry(merged);
+      ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,"clients",keeper.id),data:{...merged,updatedAt:serverTimestamp()}});
+      for(const d of sorted.slice(1)){
+        for(const arr of relationSets){ for(const item of arr.filter(x=>x.clientId===d.id)){ const coll=pathFor(arr===state.communications?"communication":arr===state.quotes?"quote":arr===state.orders?"order":arr===state.tasks?"task":"file"); ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,coll,item.id),data:{clientId:keeper.id,updatedAt:serverTimestamp()}}); } }
+        ops.push({kind:"delete",ref:doc(db,"users",currentUser.uid,"clients",d.id)});
+      }
+    }
+    for(const c of state.clients){
+      if(duplicateIds.has(c.id)) continue; const code=inferCountryCodeFromClient(c); if(code&&resolveCountryCode(c.country)!==code) ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,"clients",c.id),data:{country:countryDisplayName(code),updatedAt:serverTimestamp()}});
+    }
+    for(let i=0;i<ops.length;i+=300){ const batch=writeBatch(db); ops.slice(i,i+300).forEach(op=>op.kind==="update"?batch.update(op.ref,op.data):batch.delete(op.ref)); await batch.commit(); }
+    await autoTrackCountriesFromNames(state.clients.map(c=>countryDisplayName(inferCountryCodeFromClient(c))).filter(Boolean));
+    sync("ok","已自动同步"); alert(`清理完成：合并删除 ${duplicateIds.size} 条重复客户，并自动补全可识别国家。`);
+  }catch(err){console.error(err);sync("err","清理失败");alert("清理失败："+err.message)}
 });
 
 // ============================================================
