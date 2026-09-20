@@ -25,6 +25,11 @@ let editing = { type:null, id:null };
 let migrationPayload = null;
 let excelImportRows = [];
 let excelImportFileName = "";
+let quoteImportRows = [];
+let quoteImportFileName = "";
+let clientPage = 1;
+let quotePage = 1;
+const PAGE_SIZE = 100;
 
 const state = {
   clients: [],
@@ -35,7 +40,10 @@ const state = {
   holidays: [],
   holidayCountries: [],
   files: [],
-  settings: { quoteFollowDays:5, dormantDays:30, weekendFollow:false, currency:"USD", backupReminderDays:7, lastBackupAt:"", contactNoReplyLimit:3, contactFollowDays:3 }
+  samples: [],
+  rfqs: [],
+  exportLogs: [],
+  settings: { quoteFollowDays:5, rfqFollowDays:2, dormantDays:30, weekendFollow:false, currency:"USD", backupReminderDays:7, lastBackupAt:"", contactNoReplyLimit:3, contactFollowDays:3, salesProfilesText:"" }
 };
 
 const unsubscribers = [];
@@ -68,13 +76,23 @@ const isWeekend = () => [0,6].includes(new Date().getDay());
 const badge = (text,cls="") => `<span class="badge ${cls}">${esc(text||"未设置")}</span>`;
 const empty = text => `<div class="empty">${esc(text)}</div>`;
 const clientName = id => state.clients.find(x=>x.id===id)?.company || "未关联客户";
+function parseSalesProfileLine(line){
+  const p=String(line||"").split("|").map(x=>x.trim());
+  return {salesperson:p[0]||"",company:p[1]||"",email:p.slice(2).join("|").trim()||""};
+}
+function salesProfiles(){
+  return String(state.settings.salesProfilesText||"").split(/\r?\n/).map(x=>x.trim()).filter(Boolean).map(parseSalesProfileLine).filter(x=>x.salesperson||x.company||x.email);
+}
+function clientAssignment(c){return {salesperson:String(c?.ownerSalesperson||"").trim(),company:String(c?.ownerCompany||"").trim(),email:String(c?.ownerEmail||"").trim()};}
+function assignmentLabel(c,{email=true}={}){const a=clientAssignment(c),p=[];if(a.salesperson)p.push(a.salesperson);if(a.company)p.push(a.company);if(email&&a.email)p.push(a.email);return p.join(" · ")||"未分配";}
+function assignmentForClientId(id){return clientAssignment(state.clients.find(x=>x.id===id)||{});}
 const sync = (status,text) => {
   $("syncDot").className="sync-dot "+status;
   $("syncText").textContent=text;
 };
 const pathFor = type => ({
   client:"clients",communication:"communications",quote:"quotes",order:"orders",
-  task:"tasks",holiday:"holidays",file:"files"
+  task:"tasks",holiday:"holidays",file:"files",sample:"samples",rfq:"rfqs"
 })[type];
 const refCollection = name => collection(db,"users",currentUser.uid,name);
 
@@ -308,7 +326,7 @@ async function ensureProfileAndSettings(){
 
 function bindRealtimeData(){
   unsubscribers.splice(0).forEach(fn=>fn());
-  const collections=["clients","communications","quotes","orders","tasks","holidays","holidayCountries","files"];
+  const collections=["clients","communications","rfqs","quotes","orders","tasks","holidays","holidayCountries","files","samples","exportLogs"];
   collections.forEach(name=>{
     const unsub=onSnapshot(refCollection(name),snap=>{
       state[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -356,6 +374,25 @@ function getFollowups(){
     }
   });
 
+  state.rfqs.forEach(r=>{
+    const due=r.nextFollowUp || (r.requestDate?addDays(r.requestDate,state.settings.rfqFollowDays||2):"");
+    if(due && due<=todayISO() && !["已全部报价","客户取消","已结束"].includes(r.status||"")){
+      const overdue=Math.max(0,daysBetween(due,todayISO())||0);
+      out.push({type:"rfq",id:r.id,priority:overdue>=2?"high":"normal",title:`${clientName(r.clientId)} · RFQ ${r.rfqNo||r.subject||"询价"}`,meta:`${r.status||"待处理"} · ${r.itemCount||0}项 · ${overdue?`逾期${overdue}天`:"今天到期"}`});
+    }
+  });
+
+  state.samples.forEach(s=>{
+    const due=s.nextFollowUp||s.feedbackDueDate||s.expectedArrival||"";
+    const active=!['测试通过','测试未通过','已结束','取消'].includes(s.status||'');
+    if(active && due && due<=todayISO()){
+      const overdue=Math.max(0,daysBetween(due,todayISO())||0);
+      const what=s.partNo||s.itemName||'样品';
+      const meta=`${s.status||'样品跟进'} · ${overdue?`逾期${overdue}天`:'今天到期'}${s.tracking?` · ${s.tracking}`:''}`;
+      out.push({type:'sample',id:s.id,priority:['已签收待测试','测试中'].includes(s.status)?'high':'normal',title:`${clientName(s.clientId)} · 样品 ${what}`,meta});
+    }
+  });
+
   state.quotes.forEach(q=>{
     const due=q.nextFollowUp || (q.quoteDate?addDays(q.quoteDate,state.settings.quoteFollowDays):"");
     if(due && due<=todayISO() && !["成交","丢单","暂停"].includes(q.status)){
@@ -364,7 +401,7 @@ function getFollowups(){
     }
   });
 
-  state.clients.forEach(c=>{const rot=currentContactInfo(c);if(rot.pending){const meta=rot.next?`${rot.reason} · 建议切换至 ${contactLabel(rot.next)}`:`${rot.reason} · 已无更多联系人，建议转沉睡客户`;out.push({type:"client",id:c.id,priority:"high",title:c.company,meta});}else if(c.nextFollowUp&&c.nextFollowUp<=todayISO()){const long=["长期维护","沉睡客户"].includes(c.status);const current=rot.current?` · 当前 ${contactLabel(rot.current)} · ${rot.current.touchCount||0}/${rot.limit}次`:"";out.push({type:"client",id:c.id,priority:long?"long":c.grade==="A"?"high":"normal",title:c.company,meta:`${c.country||""} · ${c.status||""}${current}`});}});
+  state.clients.forEach(c=>{const rot=currentContactInfo(c);if(rot.pending){const meta0=rot.next?`${rot.reason} · 建议切换至 ${contactLabel(rot.next)}`:`${rot.reason} · 已无更多联系人，建议转沉睡客户`;const meta=`${meta0} · ${assignmentLabel(c,{email:false})}`;out.push({type:"client",id:c.id,priority:"high",title:c.company,meta});}else if(c.nextFollowUp&&c.nextFollowUp<=todayISO()){const long=["长期维护","沉睡客户"].includes(c.status);const current=rot.current?` · 当前 ${contactLabel(rot.current)} · ${rot.current.touchCount||0}/${rot.limit}次`:"";out.push({type:"client",id:c.id,priority:long?"long":c.grade==="A"?"high":"normal",title:c.company,meta:`${c.country||""} · ${c.status||""}${current} · ${assignmentLabel(c,{email:false})}`});}});
 
   const rank={high:3,normal:2,long:1}, map=new Map();
   out.forEach(x=>{
@@ -380,8 +417,8 @@ function getFollowups(){
 // 7. 渲染
 // ============================================================
 function renderAll(){
-  renderDashboard();renderClients();renderFollowups();renderQuotes();renderOrders();
-  renderTasks();renderHolidays();renderSettings();
+  renderDashboard();renderClients();renderFollowups();renderRFQs();renderQuotes();renderOrders();
+  renderTasks();renderReview();renderHolidays();renderSettings();
   if(currentClientId && $("clientModal").classList.contains("show")) renderClientDetail();
 }
 
@@ -389,7 +426,7 @@ function renderDashboard(){
   const follow=getFollowups();
   const stats=[
     ["今日待跟进",follow.length,`高优先级 ${follow.filter(x=>x.priority==="high").length}`],
-    ["报价",state.quotes.length,"当前云端记录"],
+    ["RFQ / 报价",`${state.rfqs.length} / ${state.quotes.length}`,"询价 / 报价单"],
     ["PI/订单",state.orders.length,`待付款 ${state.orders.filter(o=>["未付款","部分付款"].includes(o.paymentStatus)).length}`],
     ["未完成任务",state.tasks.filter(t=>!t.done).length,"实时同步"]
   ];
@@ -406,15 +443,27 @@ const clientStatuses=["新客户","已开发","已回复","有询价","已报价
 function renderClients(){
   const sf=$("clientStatusFilter"), cur=sf.value;
   sf.innerHTML='<option value="">全部状态</option>'+clientStatuses.map(x=>`<option>${x}</option>`).join(""); sf.value=cur;
-  const q=($("clientFilter").value||"").toLowerCase(), status=sf.value;
-  const rows=state.clients.filter(c=>{
-    const hay=[c.company,c.country,c.contact,getClientEmails(c,{includeNotes:true}).join(" "),c.whatsapp].join(" ").toLowerCase();
-    return (!q||hay.includes(q))&&(!status||c.status===status);
-  });
-  $("clientTable").innerHTML=rows.length?rows.map(c=>{const rot=currentContactInfo(c),ct=rot.current,ctHtml=ct?`<b>${esc(ct.name||ct.email)}</b><div class="item-meta">${ct.name?esc(ct.email):""} · ${ct.touchCount||0}/${rot.limit}次${rot.pending?" · 待切换":""}</div>`:"—";return `<tr><td data-label="客户"><b>${esc(c.company||"未命名")}</b></td><td data-label="国家">${esc(c.country||"—")}</td><td data-label="联系人">${ctHtml}</td><td data-label="状态">${badge(c.status||"—",["已成交","老客户","已回复"].includes(c.status)?"green":["PI","已报价","重点跟进"].includes(c.status)?"orange":"")}${rot.pending?` ${badge("建议换联系人","red")}`:""}</td><td data-label="等级">${esc(c.grade||"—")}</td><td data-label="下次跟进">${fmtDate(c.nextFollowUp)}</td><td data-label="操作"><button class="btn small primary" onclick="openClient('${c.id}')">详情</button> <button class="btn small" onclick="openForm('client','${c.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('client','${c.id}')">删除</button></td></tr>`}).join(""):`<tr><td class="client-empty-cell" colspan="7">${empty("还没有客户。")}</td></tr>`;
+  const ownerSel=$("clientOwnerFilter"),companySel=$("clientOurCompanyFilter");
+  const oldOwner=ownerSel?.value||"",oldCompany=companySel?.value||"";
+  const owners=[...new Set(state.clients.map(c=>c.ownerSalesperson).filter(Boolean))].sort();
+  const companies=[...new Set(state.clients.map(c=>c.ownerCompany).filter(Boolean))].sort();
+  if(ownerSel){ownerSel.innerHTML='<option value="">全部业务员</option>'+owners.map(x=>`<option>${esc(x)}</option>`).join("");ownerSel.value=owners.includes(oldOwner)?oldOwner:"";}
+  if(companySel){companySel.innerHTML='<option value="">全部我方公司</option>'+companies.map(x=>`<option>${esc(x)}</option>`).join("");companySel.value=companies.includes(oldCompany)?oldCompany:"";}
+  const q=($("clientFilter").value||"").toLowerCase(), status=sf.value, owner=ownerSel?.value||"", ourCompany=companySel?.value||"";
+  const allRows=state.clients.filter(c=>{
+    const hay=[c.company,c.country,c.contact,getClientEmails(c,{includeNotes:true}).join(" "),c.whatsapp,c.ownerSalesperson,c.ownerCompany,c.ownerEmail].join(" ").toLowerCase();
+    return (!q||hay.includes(q))&&(!status||c.status===status)&&(!owner||c.ownerSalesperson===owner)&&(!ourCompany||c.ownerCompany===ourCompany);
+  }).sort((a,b)=>(a.company||"").localeCompare(b.company||"","zh-CN"));
+  const pages=Math.max(1,Math.ceil(allRows.length/PAGE_SIZE)); if(clientPage>pages)clientPage=pages;
+  const rows=allRows.slice((clientPage-1)*PAGE_SIZE,clientPage*PAGE_SIZE);
+  $("clientTable").innerHTML=rows.length?rows.map(c=>{const rot=currentContactInfo(c),ct=rot.current,ctHtml=ct?`<b>${esc(ct.name||ct.email)}</b><div class="item-meta">${ct.name?esc(ct.email):""} · ${ct.touchCount||0}/${rot.limit}次${rot.pending?" · 待切换":""}</div>`:"—";const a=clientAssignment(c),assignHtml=(a.salesperson||a.company||a.email)?`<b>${esc(a.salesperson||"未填业务员")}</b><div class="item-meta">${esc(a.company||"未填公司")}${a.email?` · ${esc(a.email)}`:""}</div>`:"—";return `<tr><td data-label="客户"><b>${esc(c.company||"未命名")}</b></td><td data-label="国家">${esc(c.country||"—")}</td><td data-label="跟进归属">${assignHtml}</td><td data-label="联系人">${ctHtml}</td><td data-label="状态">${badge(c.status||"—",["已成交","老客户","已回复"].includes(c.status)?"green":["PI","已报价","重点跟进"].includes(c.status)?"orange":"")}${rot.pending?` ${badge("建议换联系人","red")}`:""}</td><td data-label="等级">${esc(c.grade||"—")}</td><td data-label="下次跟进">${fmtDate(c.nextFollowUp)}</td><td data-label="操作"><button class="btn small primary" onclick="openClient('${c.id}')">详情</button> <button class="btn small" onclick="openForm('client','${c.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('client','${c.id}')">删除</button></td></tr>`}).join(""):`<tr><td class="client-empty-cell" colspan="8">${empty("还没有客户。")}</td></tr>`;
+  const pg=$("clientPager"); if(pg)pg.innerHTML=allRows.length>PAGE_SIZE?`<span>共 ${allRows.length} 家 · 第 ${clientPage}/${pages} 页</span><button class="btn small" onclick="changeClientPage(-1)" ${clientPage<=1?"disabled":""}>上一页</button><button class="btn small" onclick="changeClientPage(1)" ${clientPage>=pages?"disabled":""}>下一页</button>`:`<span>共 ${allRows.length} 家</span>`;
 }
-$("clientFilter").addEventListener("input",renderClients);
-$("clientStatusFilter").addEventListener("change",renderClients);
+window.changeClientPage=d=>{clientPage=Math.max(1,clientPage+Number(d||0));renderClients();};
+$("clientFilter").addEventListener("input",()=>{clientPage=1;renderClients()});
+$("clientStatusFilter").addEventListener("change",()=>{clientPage=1;renderClients()});
+$("clientOwnerFilter")?.addEventListener("change",()=>{clientPage=1;renderClients()});
+$("clientOurCompanyFilter")?.addEventListener("change",()=>{clientPage=1;renderClients()});
 
 function renderFollowups(){
   const f=getFollowups();
@@ -424,17 +473,51 @@ function renderFollowups(){
   $("longFollow").innerHTML=f.filter(x=>x.priority==="long").map(html).join("")||empty("暂无");
 }
 
-function renderQuotes(){
-  $("quoteTable").innerHTML=state.quotes.length?state.quotes.map(q=>`<tr>
-    <td>${esc(clientName(q.clientId))}</td><td><b>${esc(q.partNo||"—")}</b></td><td>${esc(q.brand||"—")}</td><td>${esc(q.qty||"—")}</td>
-    <td>${esc(q.quotePrice||"—")}</td><td>${badge(q.status||"—","orange")}</td><td>${fmtDate(q.nextFollowUp)}</td>
-    <td><button class="btn small" onclick="openForm('quote','${q.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('quote','${q.id}')">删除</button></td>
-  </tr>`).join(""):`<tr><td colspan="8">${empty("暂无报价。")}</td></tr>`;
+function renderRFQs(){
+  const rows=state.rfqs.slice().sort((a,b)=>(b.requestDate||"").localeCompare(a.requestDate||""));
+  const el=$("rfqTable"); if(!el)return;
+  el.innerHTML=rows.length?rows.map(r=>`<tr><td>${esc(clientName(r.clientId))}</td><td><b>${esc(r.rfqNo||r.subject||"RFQ")}</b><div class="item-meta">${esc(r.sourceFile||"")}</div></td><td>${fmtDate(r.requestDate)}</td><td>${esc(r.itemCount||0)}</td><td>${badge(r.status||"待处理",["已全部报价","已结束"].includes(r.status)?"green":["待报价","部分报价"].includes(r.status)?"orange":"")}</td><td>${esc(r.customerNeed||r.notes||"—")}</td><td>${fmtDate(r.nextFollowUp)}</td><td><button class="btn small" onclick="openForm('rfq','${r.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('rfq','${r.id}')">删除</button></td></tr>`).join(""):`<tr><td colspan="8">${empty("暂无 RFQ。收到客户询价后先登记 RFQ，再录入报价。")}</td></tr>`;
 }
+function inRange(date,days){ if(!date)return false; const d=parseDate(date); if(!d)return false; return d>=new Date(Date.now()-Number(days||30)*86400000); }
+function renderReview(){
+  const el=$("reviewStats"); if(!el)return; const days=Number($("reviewRange")?.value||30);
+  const clients=state.clients.filter(x=>inRange(x.createdDate||x.firstContact||x.createdAt?.toDate?.()?.toISOString?.().slice(0,10),days));
+  const comms=state.communications.filter(x=>inRange(x.date,days));
+  const rfqs=state.rfqs.filter(x=>inRange(x.requestDate,days));
+  const quotes=state.quotes.filter(x=>inRange(x.quoteDate,days));
+  const samples=state.samples.filter(x=>inRange(x.requestDate||x.sentDate,days));
+  const orders=state.orders.filter(x=>inRange(x.piDate,days));
+  const wins=state.clients.filter(x=>["已成交","老客户"].includes(x.status));
+  const unpaid=state.orders.filter(x=>["未付款","部分付款"].includes(x.paymentStatus));
+  const replied=new Set(comms.filter(x=>["客户回复","双向沟通"].includes(x.direction)).map(x=>x.clientId));
+  const cards=[["新增客户",clients.length],["有回复客户",replied.size],["RFQ",rfqs.length],["报价单",quotes.length],["样品",samples.length],["PI/订单",orders.length],["累计成交客户",wins.length],["待付款PI",unpaid.length]];
+  el.innerHTML=cards.map(([a,b])=>`<div class="report-card"><div class="lbl">${a}</div><div class="num">${b}</div></div>`).join("");
+  const feed={}; comms.forEach(x=>{const k=x.feedbackType||inferFeedbackType(x.customerFeedback||x.content||""); if(k&&k!=="其他")feed[k]=(feed[k]||0)+1}); state.quotes.filter(q=>q.lossReason).forEach(q=>feed[q.lossReason]=(feed[q.lossReason]||0)+1);
+  const total=Object.values(feed).reduce((a,b)=>a+b,0)||1; $("reviewFeedback").innerHTML=Object.entries(feed).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([k,v])=>`<div class="item"><div class="item-title">${esc(k)} · ${v}</div><div class="progress"><i style="width:${Math.round(v/total*100)}%"></i></div></div>`).join("")||empty("暂无结构化反馈。");
+  const countries={}; state.clients.forEach(c=>{const k=c.country||"未填写";countries[k]=(countries[k]||0)+1}); const ct=Object.values(countries).reduce((a,b)=>a+b,0)||1; $("reviewCountries").innerHTML=Object.entries(countries).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k,v])=>`<div class="item"><div class="item-title">${esc(k)} · ${v}</div><div class="progress"><i style="width:${Math.round(v/ct*100)}%"></i></div></div>`).join("")||empty("暂无客户国家数据。");
+}
+$("reviewRange")?.addEventListener("change",renderReview);
+
+function renderQuotes(){
+  const all=state.quotes.slice().sort((a,b)=>(b.quoteDate||"").localeCompare(a.quoteDate||""));
+  const pages=Math.max(1,Math.ceil(all.length/PAGE_SIZE)); if(quotePage>pages)quotePage=pages;
+  const rows=all.slice((quotePage-1)*PAGE_SIZE,quotePage*PAGE_SIZE);
+  $("quoteTable").innerHTML=rows.length?rows.map(q=>{
+    const isBatch=Array.isArray(q.items)&&q.items.length;
+    const title=isBatch?(q.batchName||`${q.items[0]?.partNo||"批量报价"} 等 ${q.itemCount||q.items.length} 项`):(q.partNo||"—");
+    const brand=isBatch?(q.brand||"多品牌"):(q.brand||"—");
+    const qty=isBatch?`${q.itemCount||q.items.length} 项`:(q.qty||"—");
+    const price=isBatch?(q.priceSummary||"批量报价"):(q.quotePrice||"—");
+    const actions=isBatch?`<button class="btn small primary" onclick="openQuoteBatch('${q.id}')">查看明细</button> <button class="btn small danger" onclick="removeEntity('quote','${q.id}')">删除</button>`:`<button class="btn small" onclick="openForm('quote','${q.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('quote','${q.id}')">删除</button>`;
+    return `<tr><td>${esc(clientName(q.clientId))}</td><td><b>${esc(title)}</b>${isBatch?`<div class="quote-batch">Excel批量报价</div>`:""}</td><td>${esc(brand)}</td><td>${esc(qty)}</td><td>${esc(price)}</td><td>${badge(q.status||"—","orange")}</td><td>${fmtDate(q.nextFollowUp)}</td><td>${actions}</td></tr>`;
+  }).join(""):`<tr><td colspan="8">${empty("暂无报价。")}</td></tr>`;
+  const pg=$("quotePager"); if(pg)pg.innerHTML=all.length>PAGE_SIZE?`<span>共 ${all.length} 份报价 · 第 ${quotePage}/${pages} 页</span><button class="btn small" onclick="changeQuotePage(-1)" ${quotePage<=1?"disabled":""}>上一页</button><button class="btn small" onclick="changeQuotePage(1)" ${quotePage>=pages?"disabled":""}>下一页</button>`:`<span>共 ${all.length} 份报价</span>`;
+}
+window.changeQuotePage=d=>{quotePage=Math.max(1,quotePage+Number(d||0));renderQuotes();};
 function renderOrders(){
   $("orderTable").innerHTML=state.orders.length?state.orders.map(o=>`<tr>
     <td><b>${esc(o.piNo||"—")}</b></td><td>${esc(clientName(o.clientId))}</td><td>${esc(o.amount||0)} ${esc(o.currency||state.settings.currency)}</td>
-    <td>${badge(o.paymentStatus||"—",["未付款","部分付款"].includes(o.paymentStatus)?"red":"green")}</td><td>${esc(o.orderStatus||"—")}</td><td>${esc(o.shipping||"—")}</td>
+    <td>${badge(o.paymentStatus||"—",["未付款","部分付款"].includes(o.paymentStatus)?"red":"green")}<div class="item-meta">已付 ${esc(o.paidAmount||0)} · 余额 ${esc(o.balanceDue||0)}</div></td><td>${esc(o.orderStatus||"—")}</td><td>${esc(o.shippingMode||o.shipping||"—")}<div class="item-meta">${esc(o.tracking||"")}</div></td>
     <td><button class="btn small" onclick="openForm('order','${o.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('order','${o.id}')">删除</button></td>
   </tr>`).join(""):`<tr><td colspan="7">${empty("暂无PI / 订单。")}</td></tr>`;
 }
@@ -466,26 +549,44 @@ function renderHolidays(){
 const schemas={
   client:[
     ["company","公司名称","text",true],["country","国家","text"],["city","城市","text"],["website","官网","text"],
+    ["salesProfile","跟进归属（业务员 / 我方公司 / 邮箱）","salesProfile",false],
     ["grade","客户等级","select",false,["A","B","C","D"]],["status","客户状态","select",false,clientStatuses],
     ["contact","联系人","text"],["title","职位","text"],["email","Email（可填多个，用逗号/分号/换行分隔）","textarea"],["phone","电话","text"],["whatsapp","WhatsApp","text"],
     ["linkedin","LinkedIn","text"],["facebook","Facebook","text"],["telegram","Telegram","text"],
+    ["customerType","客户类型","select",false,["终端工厂","EMS/PCBA","贸易商/分销商","维修/工程公司","其他"]],["industry","应用行业","text"],["source","开发来源","select",false,["Google","外贸通","LinkedIn","Facebook","展会","转介绍","网站询盘","老客户","其他"]],
+    ["procurementPain","采购特点/痛点","textarea"],["paymentHabit","付款习惯","text"],["logisticsHabit","物流习惯","text"],["priceSensitivity","价格敏感度","select",false,["高","中","低","未知"]],
     ["lastContact","最后联系","date"],["nextFollowUp","下次跟进","date"],["notes","备注","textarea"]
   ],
   communication:[
     ["clientId","客户","client",true],["contactEmail","本次联系邮箱","clientEmail",false],["date","沟通日期","date",true],["channel","渠道","select",true,["Email","WhatsApp","Telegram","LinkedIn","Facebook","电话","其他"]],
     ["direction","方向","select",false,["我联系客户","客户回复","双向沟通","邮件退信"]],["subject","主题/简述","text"],["content","沟通内容","textarea",true],
-    ["customerFeedback","客户反馈","textarea"],["nextAction","下一步","text"],["nextFollowUp","下次跟进","date"]
+    ["feedbackType","反馈类型","select",false,["无回复","价格高/目标价","交期问题","无库存","品牌不接受","需要样品","样品测试","等待项目","已有供应商","付款条件","物流问题","暂时无需求","拒绝","成交信号","其他"]],["customerFeedback","客户反馈","textarea"],["nextAction","下一步","text"],["nextFollowUp","下次跟进","date"]
+  ],
+  rfq:[
+    ["clientId","客户","client",true],["rfqNo","RFQ编号/主题","text",true],["requestDate","收到询价日期","date",true],["itemCount","型号/项目数量","number"],["parts","主要型号（可多行/逗号分隔）","textarea"],["sourceFile","原始RFQ文件名/链接","text"],["status","状态","select",false,["待报价","找货中","部分报价","已全部报价","等待客户反馈","客户取消","已结束"]],["customerNeed","客户需求/重点","textarea"],["nextFollowUp","下次跟进","date"],["notes","备注","textarea"]
   ],
   quote:[
     ["clientId","客户","client",true],["partNo","型号","text",true],["brand","品牌","text"],["qty","数量","text"],["targetPrice","Target Price","text"],["quotePrice","报价","text"],
     ["status","状态","select",false,["待报价","找货中","已报价","等待回复","客户议价","重新报价","已做PI","成交","丢单","暂停"]],
-    ["quoteDate","报价日期","date"],["nextFollowUp","下次跟进","date"],["notes","备注","textarea"]
+    ["rfqNo","关联RFQ编号","text"],["feedbackType","客户反馈类型","select",false,["无回复","价格高/目标价","交期问题","无库存","品牌不接受","等待项目","已有供应商","付款条件","物流问题","暂时无需求","成交信号","其他"]],["lossReason","丢单/未成交原因","select",false,["","价格","交期","品牌/规格","无货","付款条件","物流","客户取消","已有供应商","项目暂停","失联","其他"]],["quoteDate","报价日期","date"],["nextFollowUp","下次跟进","date"],["notes","备注","textarea"]
   ],
   order:[
     ["clientId","客户","client",true],["piNo","PI编号","text",true],["amount","金额","number"],["currency","币种","select",false,["USD","EUR","CNY","TRY","RUB"]],
+    ["paymentTerms","付款方式","text"],["depositDue","定金/首付款应付","number"],["paidAmount","已付金额","number"],["balanceDue","待付余额","number"],["promisedPayDate","承诺付款日期","date"],
     ["paymentStatus","付款状态","select",false,["未付款","部分付款","已付款","退款/取消"]],
     ["orderStatus","订单状态","select",false,["PI待确认","PI待付款","已付款","备货中","待出货","已出货","已完成","暂停","取消"]],
-    ["piDate","PI日期","date"],["deliveryDate","交期","date"],["shipping","物流","text"],["tracking","运单号","text"],["notes","备注","textarea"]
+    ["piDate","PI日期","date"],["deliveryDate","交期","date"],["shippingMode","运输方式","select",false,["DHL/UPS/FedEx","客户货代/中国仓","俄罗斯专线/货代","空运","海运","客户自提","其他"]],["forwarder","货代/承运商","text"],["chinaWarehouseDate","交中国仓日期","date"],["internationalShipDate","国际出运日期","date"],["shipping","物流/渠道","text"],["tracking","运单号","text"],["customsStatus","清关状态","text"],["expectedArrival","预计到达","date"],["receivedDate","实际签收","date"],["notes","备注","textarea"]
+  ],
+  sample:[
+    ["clientId","客户","client",true],["partNo","样品型号/名称","text",true],["qty","样品数量","text"],
+    ["requestDate","客户提出样品日期","date"],["deliveryMode","交付方式","select",false,["直接寄客户","寄客户货代/中国仓","客户自提/其他"]],
+    ["sentDate","我司寄出日期","date"],["carrier","国内物流/快递","text"],["tracking","国内运单号","text"],
+    ["forwarderName","客户货代/仓库名称","text"],["forwarderArrivalDate","货代收货日期","date"],["consolidationDueDate","预计集货/出运日期","date"],
+    ["internationalShipDate","国际出运日期","date"],["internationalCarrier","国际物流/渠道","text"],["internationalTracking","国际运单号","text"],
+    ["status","样品状态","select",false,["待确认","待寄出","已寄出","运输中","已交客户货代","货代待集货","等待客户安排出运","已国际出运","国际运输中","已签收待测试","测试中","测试通过","测试未通过","已结束","取消"]],
+    ["expectedArrival","预计客户收货日期","date"],["feedbackDueDate","预计反馈日期","date"],["feedbackDate","实际反馈日期","date"],
+    ["feedbackResult","反馈结论","select",false,["待反馈","满意/通过","需改进","失败/不通过","暂无结论"]],["feedback","客户样品反馈","textarea"],
+    ["nextAction","下一步","text"],["nextFollowUp","下次跟进","date"],["notes","备注","textarea"]
   ],
   task:[["title","任务名称","text",true],["priority","优先级","select",false,["高","普通","低"]],["dueDate","到期日期","date"],["clientId","关联客户","client"],["notes","备注","textarea"]],
   holiday:[["country","国家","text",true],["name","节日名称","text",true],["date","日期","date",true],["remindDays","提前提醒天数","number"],["notes","备注","textarea"]]
@@ -497,13 +598,18 @@ window.openForm = (type,id=null,preset={})=>{
   if(!id){
     if(type==="client"){existing.grade="C";existing.status="新客户"}
     if(type==="communication"){existing.date=todayISO();existing.channel="Email";existing.direction="我联系客户";if(existing.clientId&&!existing.contactEmail){const cc=state.clients.find(x=>x.id===existing.clientId);existing.contactEmail=currentContactInfo(cc||{}).current?.email||""}}
+    if(type==="rfq"){existing.requestDate=todayISO();existing.status="待报价";existing.nextFollowUp=addDays(todayISO(),state.settings.rfqFollowDays||2)}
     if(type==="quote"){existing.status="待报价";existing.quoteDate=todayISO();existing.nextFollowUp=addDays(todayISO(),state.settings.quoteFollowDays)}
     if(type==="order"){existing.paymentStatus="未付款";existing.orderStatus="PI待付款";existing.piDate=todayISO();existing.currency=state.settings.currency}
+    if(type==="sample"){existing.requestDate=todayISO();existing.status="待确认";existing.feedbackResult="待反馈";existing.nextFollowUp=addDays(todayISO(),3)}
     if(type==="task"){existing.priority="普通";existing.dueDate=todayISO()}
     if(type==="holiday"){existing.remindDays=7}
   }
-  if(type==="client") existing.email=getClientEmails(existing,{includeNotes:true}).join("; ");
-  const names={client:"客户",communication:"沟通记录",quote:"报价",order:"PI / 订单",task:"任务",holiday:"节假日"};
+  if(type==="client"){
+    existing.email=getClientEmails(existing,{includeNotes:true}).join("; ");
+    const a=clientAssignment(existing); existing.salesProfile=[a.salesperson,a.company,a.email].filter(Boolean).join(" | ");
+  }
+  const names={client:"客户",communication:"沟通记录",rfq:"RFQ/询价",quote:"报价",order:"PI / 订单",sample:"样品记录",task:"任务",holiday:"节假日"};
   $("formTitle").textContent=(id?"编辑 ":"新增 ")+names[type];
   $("formFields").innerHTML=schemas[type].map(f=>fieldHtml(f,existing[f[0]],existing)).join("");
   $("formModal").classList.add("show");
@@ -514,6 +620,12 @@ function fieldHtml([key,label,type,required,opts],val,context={}){
   let c="";
   if(type==="textarea") c=`<textarea name="${key}" ${req}>${esc(val||"")}</textarea>`;
   else if(type==="select") c=`<select name="${key}" ${req}>${(opts||[]).map(o=>`<option ${String(val)===String(o)?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  else if(type==="salesProfile"){
+    const profiles=salesProfiles(),cur=String(val||"").trim();
+    const values=profiles.map(p=>[p.salesperson,p.company,p.email].filter(Boolean).join(" | "));
+    const custom=cur&&!values.includes(cur)?`<option value="${esc(cur)}" selected>${esc(cur)}（现有）</option>`:"";
+    c=`<select name="${key}" ${req}><option value="">未分配</option>${custom}${values.map(v=>`<option value="${esc(v)}" ${cur===v?"selected":""}>${esc(v)}</option>`).join("")}</select><div class="item-meta" style="margin-top:4px">没有选项时，请先到“设置 → 跟进业务员 / 我方公司”配置。</div>`;
+  }
   else if(type==="client") c=`<select name="${key}" ${req}><option value="">请选择客户</option>${state.clients.map(x=>`<option value="${x.id}" ${val===x.id?"selected":""}>${esc(x.company)} · ${esc(x.country||"")}</option>`).join("")}</select>`;
   else if(type==="clientEmail"){const cc=state.clients.find(x=>x.id===context.clientId),emails=cc?getClientContacts(cc,{includeNotes:true}):[];c=`<select name="${key}" ${req}><option value="">请选择邮箱</option>${emails.map(x=>`<option value="${esc(x.email)}" ${String(val).toLowerCase()===x.email.toLowerCase()?"selected":""}>${esc(contactLabel(x))}</option>`).join("")}</select>`;}
   else c=`<input name="${key}" type="${type}" value="${esc(val??"")}" ${req}>`;
@@ -522,7 +634,7 @@ function fieldHtml([key,label,type,required,opts],val,context={}){
 $("saveEntityBtn").addEventListener("click",saveEntity);
 async function saveEntity(){
   const form=$("entityForm");if(!form.reportValidity())return;const wasEditing=Boolean(editing.id),original=(editing.type&&editing.id)?state[pathFor(editing.type)]?.find(x=>x.id===editing.id)||{}:{};const fd=new FormData(form),obj={};for(const[k,v]of fd.entries())obj[k]=v;
-  if(editing.type==="order")obj.amount=Number(obj.amount||0);if(editing.type==="holiday")obj.remindDays=Number(obj.remindDays||7);if(editing.type==="client"){buildContactsFromEditedClient(obj,original);canonicalizeClientCountry(obj);}sync("busy","正在保存…");const key=pathFor(editing.type);
+  if(editing.type==="order"){obj.amount=Number(obj.amount||0);obj.depositDue=Number(obj.depositDue||0);obj.paidAmount=Number(obj.paidAmount||0);obj.balanceDue=Number(obj.balanceDue||0);}if(editing.type==="rfq")obj.itemCount=Number(obj.itemCount||0);if(editing.type==="holiday")obj.remindDays=Number(obj.remindDays||7);if(editing.type==="client"){const p=parseSalesProfileLine(obj.salesProfile||"");obj.ownerSalesperson=p.salesperson;obj.ownerCompany=p.company;obj.ownerEmail=p.email;delete obj.salesProfile;buildContactsFromEditedClient(obj,original);canonicalizeClientCountry(obj);}if(editing.type!=="client"&&obj.clientId){const a=assignmentForClientId(obj.clientId);obj.ownerSalesperson=obj.ownerSalesperson||a.salesperson;obj.ownerCompany=obj.ownerCompany||a.company;obj.ownerEmail=obj.ownerEmail||a.email;}if(editing.type==="communication"){if(!obj.feedbackType)obj.feedbackType=inferFeedbackType(obj.customerFeedback||obj.content||"");const inf=inferCommunicationNextStep(obj);if(!String(obj.nextAction||"").trim())obj.nextAction=inf.nextAction;if(!String(obj.nextFollowUp||"").trim())obj.nextFollowUp=inf.nextFollowUp;}if(editing.type==="sample"){const base=obj.internationalShipDate||obj.forwarderArrivalDate||obj.sentDate||obj.requestDate||todayISO();if(!String(obj.nextAction||"").trim()){if(["已交客户货代","货代待集货","等待客户安排出运"].includes(obj.status))obj.nextAction="确认货代已收货，并等待客户集货/国际出运安排";else if(["已国际出运","国际运输中"].includes(obj.status))obj.nextAction="跟踪国际物流并确认客户签收";else if(["已寄出","运输中"].includes(obj.status)){obj.nextAction=obj.deliveryMode==="寄客户货代/中国仓"?"确认客户货代是否已收货":"确认样品是否签收";}else if(["已签收待测试","测试中"].includes(obj.status))obj.nextAction="跟进样品测试结果";else if(obj.status==="测试通过")obj.nextAction="询问批量需求并推进正式订单";else if(obj.status==="测试未通过")obj.nextAction="确认失败原因并提供替代/改进方案";else obj.nextAction="推进样品安排";}if(!String(obj.nextFollowUp||"").trim()){if(obj.feedbackDueDate)obj.nextFollowUp=obj.feedbackDueDate;else if(obj.expectedArrival)obj.nextFollowUp=obj.expectedArrival;else if(obj.consolidationDueDate)obj.nextFollowUp=obj.consolidationDueDate;else if(["已交客户货代","货代待集货","等待客户安排出运"].includes(obj.status))obj.nextFollowUp=addDays(base,7);else obj.nextFollowUp=addDays(base,3);}}sync("busy","正在保存…");const key=pathFor(editing.type);
   if(editing.id)await updateDoc(doc(db,"users",currentUser.uid,key,editing.id),{...obj,updatedAt:serverTimestamp()});else{const r=await addDoc(refCollection(key),{...obj,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});editing.id=r.id;}
   if(editing.type==="client"&&obj.country)autoTrackCountriesFromNames([obj.country]).catch(console.warn);if(editing.type==="communication"&&obj.clientId)await updateClientOutreachFromCommunication(obj,{isNew:!wasEditing});closeModal("formModal");sync("ok","已自动同步");
 }
@@ -533,7 +645,7 @@ async function updateClientOutreachFromCommunication(obj,{isNew=true}={}){
     else if(isNew&&obj.direction==="邮件退信"){ct={...ct,invalid:true,replied:false,status:"无效",lastContact:obj.date||todayISO()};contacts[idx]=ct;updates.contacts=contacts;updates.currentContactEmail=ct.email;updates.contactRotationStatus="waiting_switch";updates.nextFollowUp=obj.date||todayISO();}}
   await updateDoc(doc(db,"users",currentUser.uid,"clients",obj.clientId),updates);
 }
-window.recordOutreachTouch=async clientId=>{const c=state.clients.find(x=>x.id===clientId);if(!c)return;const info=currentContactInfo(c);if(!info.current){alert("这个客户还没有可开发邮箱，请先编辑客户并添加邮箱。");return}const n=(info.current.touchCount||0)+1,next=addDays(todayISO(),Math.max(1,Number(state.settings.contactFollowDays||3)));if(!confirm(`记录一次开发邮件？\n\n当前联系人：${contactLabel(info.current)}\n本次将记为第 ${n} 次联系。`))return;sync("busy","正在记录开发…");const obj={clientId,date:todayISO(),channel:"Email",direction:"我联系客户",contactEmail:info.current.email,subject:`开发邮件 · 第${n}次`,content:`已向 ${info.current.email} 发送第 ${n} 次开发/跟进邮件，暂未收到回复。`,nextAction:"等待回复",nextFollowUp:next};await addDoc(refCollection("communications"),{...obj,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});await updateClientOutreachFromCommunication(obj,{isNew:true});sync("ok","已自动同步");};
+window.recordOutreachTouch=async clientId=>{const c=state.clients.find(x=>x.id===clientId);if(!c)return;const info=currentContactInfo(c);if(!info.current){alert("这个客户还没有可开发邮箱，请先编辑客户并添加邮箱。");return}const n=(info.current.touchCount||0)+1,next=addDays(todayISO(),Math.max(1,Number(state.settings.contactFollowDays||3)));if(!confirm(`记录一次开发邮件？\n\n当前联系人：${contactLabel(info.current)}\n本次将记为第 ${n} 次联系。`))return;sync("busy","正在记录开发…");const a=clientAssignment(c),obj={clientId,date:todayISO(),channel:"Email",direction:"我联系客户",contactEmail:info.current.email,ownerSalesperson:a.salesperson,ownerCompany:a.company,ownerEmail:a.email,subject:`开发邮件 · 第${n}次`,content:`已向 ${info.current.email} 发送第 ${n} 次开发/跟进邮件，暂未收到回复。`,nextAction:"等待回复",nextFollowUp:next};await addDoc(refCollection("communications"),{...obj,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});await updateClientOutreachFromCommunication(obj,{isNew:true});sync("ok","已自动同步");};
 window.switchToNextContact=async clientId=>{const c=state.clients.find(x=>x.id===clientId);if(!c)return;const info=currentContactInfo(c);if(!info.current){alert("没有可切换的联系人。");return}if(!info.next){if(!confirm(`这家公司没有更多可用联系人了。\n\n是否标记为“沉睡客户”，并在 ${state.settings.dormantDays||30} 天后重新提醒？`))return;await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),{contactRotationStatus:"completed",status:"沉睡客户",nextFollowUp:addDays(todayISO(),Number(state.settings.dormantDays||30)),updatedAt:serverTimestamp()});return}if(!confirm(`切换开发联系人？\n\n当前：${contactLabel(info.current)}\n下一位：${contactLabel(info.next)}`))return;const contacts=info.contacts.map(x=>({...x})),oldIdx=info.index,nextIdx=contacts.findIndex(x=>x.email.toLowerCase()===info.next.email.toLowerCase());if(oldIdx>=0&&!contacts[oldIdx].replied&&!contacts[oldIdx].invalid&&contacts[oldIdx].status!==`${info.limit}次未回复`)contacts[oldIdx].status="已切换";if(nextIdx>=0&&contacts[nextIdx].status==="未开始")contacts[nextIdx].status="开发中";const patch={contacts,currentContactEmail:info.next.email,contactRotationStatus:"active",nextFollowUp:todayISO(),updatedAt:serverTimestamp()};if(info.next.name)patch.contact=info.next.name;if(info.next.title)patch.title=info.next.title;if(info.next.phone)patch.phone=info.next.phone;if(info.next.whatsapp)patch.whatsapp=info.next.whatsapp;await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),patch);};
 window.setCurrentContact=async(clientId,encodedEmail)=>{const email=decodeURIComponent(encodedEmail||""),c=state.clients.find(x=>x.id===clientId);if(!c)return;const contacts=getClientContacts(c,{includeNotes:true}),ct=contacts.find(x=>x.email.toLowerCase()===email.toLowerCase());if(!ct)return;const patch={contacts,currentContactEmail:ct.email,contactRotationStatus:ct.replied?"replied":"active",nextFollowUp:c.nextFollowUp||todayISO(),updatedAt:serverTimestamp()};if(ct.name)patch.contact=ct.name;if(ct.title)patch.title=ct.title;if(ct.phone)patch.phone=ct.phone;if(ct.whatsapp)patch.whatsapp=ct.whatsapp;await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),patch);};
 window.markContactInvalid=async(clientId,encodedEmail)=>{const email=decodeURIComponent(encodedEmail||""),c=state.clients.find(x=>x.id===clientId);if(!c)return;if(!confirm(`把 ${email} 标记为无效/退信，并提示切换下一联系人吗？`))return;const contacts=getClientContacts(c,{includeNotes:true}).map(x=>x.email.toLowerCase()===email.toLowerCase()?{...x,invalid:true,replied:false,status:"无效",lastContact:todayISO()}:x);await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),{contacts,currentContactEmail:email,contactRotationStatus:"waiting_switch",nextFollowUp:todayISO(),updatedAt:serverTimestamp()});};
@@ -563,37 +675,72 @@ document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
   b.classList.add("active");document.querySelector(`[data-pane="${b.dataset.tab}"]`)?.classList.add("active");
 }));
 
+function clientQuoteGroups(quotes){
+  const groups=new Map();
+  quotes.forEach(q=>{
+    const batch=Array.isArray(q.items)&&q.items.length;
+    const source=batch?(q.sourceFile||q.batchName||'批量报价'):(q.partNo||q.id);
+    const key=`${q.quoteDate||''}||${source}`;
+    if(!groups.has(key))groups.set(key,{key,date:q.quoteDate||'',source,quotes:[],items:[],status:[],priced:0});
+    const g=groups.get(key);g.quotes.push(q);g.status.push(q.status||'');
+    if(batch){g.items.push(...q.items);g.priced+=q.items.filter(i=>i.quotePrice).length;}else{g.items.push({partNo:q.partNo,brand:q.brand,qty:q.qty,targetPrice:q.targetPrice,quotePrice:q.quotePrice,currency:q.currency,dc:q.dc,leadTime:q.leadTime,notes:q.notes});if(q.quotePrice)g.priced++;}
+  });
+  return [...groups.values()].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+}
+window.openClientQuoteGroup=(clientId,encodedKey)=>{
+  const key=decodeURIComponent(encodedKey||'');
+  const quotes=state.quotes.filter(x=>x.clientId===clientId);
+  const g=clientQuoteGroups(quotes).find(x=>x.key===key);if(!g)return;
+  $('quoteBatchTitle').textContent=g.source||'报价明细';$('quoteBatchSub').textContent=`${clientName(clientId)} · ${fmtDate(g.date)} · ${g.items.length} 个型号`;
+  $('quoteBatchBody').innerHTML=`<div class="notice">客户详情只显示报价摘要；这里按需要查看型号明细。</div><div class="table-wrap"><table><thead><tr><th>#</th><th>型号</th><th>品牌</th><th>数量</th><th>Target Price</th><th>报价</th><th>币种</th><th>DC</th><th>交期</th><th>备注</th></tr></thead><tbody>${g.items.map((x,i)=>`<tr><td>${i+1}</td><td><b>${esc(x.partNo||'')}</b></td><td>${esc(x.brand||'')}</td><td>${esc(x.qty||'')}</td><td>${esc(x.targetPrice||'')}</td><td>${esc(x.quotePrice||'')}</td><td>${esc(x.currency||'')}</td><td>${esc(x.dc||'')}</td><td>${esc(x.leadTime||'')}</td><td>${esc(x.notes||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  $('quoteBatchModal').classList.add('show');
+};
+
 function renderClientDetail(){
   const c=state.clients.find(x=>x.id===currentClientId); if(!c)return;
+  const rfqs=state.rfqs.filter(x=>x.clientId===c.id).sort((a,b)=>(b.requestDate||"").localeCompare(a.requestDate||""));
   const comms=state.communications.filter(x=>x.clientId===c.id).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const quotes=state.quotes.filter(x=>x.clientId===c.id).sort((a,b)=>(b.quoteDate||"").localeCompare(a.quoteDate||""));
   const orders=state.orders.filter(x=>x.clientId===c.id).sort((a,b)=>(b.piDate||"").localeCompare(a.piDate||""));
+  const samples=state.samples.filter(x=>x.clientId===c.id).sort((a,b)=>(b.sentDate||b.requestDate||"").localeCompare(a.sentDate||a.requestDate||""));
   const files=state.files.filter(x=>x.clientId===c.id).sort((a,b)=>(b.createdDate||"").localeCompare(a.createdDate||""));
 
   $("clientTitle").textContent=c.company||"客户详情";
   const clientEmails=getClientEmails(c,{includeNotes:true}),rot=currentContactInfo(c),current=rot.current;
   $("clientSub").textContent=[c.country,c.city,current?.name||c.contact,current?.email||clientEmails[0]].filter(Boolean).join(" · ");
   const rotationText=rot.pending?(rot.next?`建议切换到：${contactLabel(rot.next)}`:"所有联系人已开发完，建议转沉睡客户"):(current?`当前：${contactLabel(current)} · 已联系 ${current.touchCount||0}/${rot.limit} 次`:"尚未设置开发联系人");
-  $("clientOverview").innerHTML=`<div class="grid cols-2"><div class="card"><div class="item-meta">基本资料</div><h3>${esc(c.company||"")}</h3><div class="item-meta">国家：${esc(c.country||"—")} · 等级：${esc(c.grade||"—")} · 状态：${esc(c.status||"—")}</div><div class="item-meta">邮箱：${clientEmails.length?clientEmails.map(e=>esc(e)).join("；"):"—"} · WhatsApp：${esc(c.whatsapp||"—")}</div></div><div class="card"><div class="item-meta">联系人开发状态</div><h3>${esc(rotationText)}</h3><div class="item-meta">最后联系：${fmtDate(c.lastContact)} · 下次跟进：${fmtDate(c.nextFollowUp)}</div><div style="margin-top:8px;display:flex;gap:7px;flex-wrap:wrap"><button class="btn small primary" onclick="openForm('communication',null,{clientId:'${c.id}'})">记录沟通</button>${current&&!current.replied&&!current.invalid?` <button class="btn small" onclick="recordOutreachTouch('${c.id}')">＋记录一次开发</button>`:""}${rot.pending?` <button class="btn small danger" onclick="switchToNextContact('${c.id}')">➡ 切换下一联系人</button>`:""} <button class="btn small" onclick="openForm('quote',null,{clientId:'${c.id}'})">新增报价</button></div></div></div>`;
+  const currentStage=orders.find(x=>!["已完成","取消"].includes(x.orderStatus))?"PI/订单":samples.find(x=>!["测试通过","测试未通过","已结束","取消"].includes(x.status))?"样品":quotes.find(x=>!["成交","丢单","暂停"].includes(x.status))?"报价后跟进":rfqs.find(x=>!["已全部报价","客户取消","已结束"].includes(x.status))?"RFQ处理":comms.length?"开发/沟通":"新客户";
+  const nextRec=recommendNextStep(c.id);
+  $("clientOverview").innerHTML=`<div class="summary-box"><div class="card-head"><h3>客户当前状态摘要</h3>${badge(c.grade?`${c.grade}级客户`:"未评级",c.grade==="A"?"red":c.grade==="B"?"orange":"green")}</div><div class="summary-grid"><div class="summary-kpi"><div class="k">当前阶段</div><div class="v">${esc(currentStage)}</div></div><div class="summary-kpi"><div class="k">当前联系人</div><div class="v">${esc(contactLabel(current)||"—")}</div></div><div class="summary-kpi"><div class="k">最近动作</div><div class="v">${esc((comms[0]?.subject||quotes[0]?.batchName||quotes[0]?.partNo||rfqs[0]?.rfqNo||samples[0]?.partNo||"暂无").slice(0,60))}</div></div><div class="summary-kpi"><div class="k">下一步</div><div class="v">${esc(nextRec.title)}</div></div></div></div><div class="grid cols-2"><div class="card"><div class="item-meta">基本资料</div><h3>${esc(c.company||"")}</h3><div class="item-meta">国家：${esc(c.country||"—")} · 等级：${esc(c.grade||"—")} · 状态：${esc(c.status||"—")}</div><div class="item-meta"><b>跟进归属：</b>${esc(assignmentLabel(c))}</div><div class="item-meta">邮箱：${clientEmails.length?clientEmails.map(e=>esc(e)).join("；"):"—"} · WhatsApp：${esc(c.whatsapp||"—")}</div></div><div class="card"><div class="item-meta">联系人开发状态</div><h3>${esc(rotationText)}</h3><div class="item-meta">最后联系：${fmtDate(c.lastContact)} · 下次跟进：${fmtDate(c.nextFollowUp)}</div><div style="margin-top:8px;display:flex;gap:7px;flex-wrap:wrap"><button class="btn small primary" onclick="openForm('communication',null,{clientId:'${c.id}'})">记录沟通</button>${current&&!current.replied&&!current.invalid?` <button class="btn small" onclick="recordOutreachTouch('${c.id}')">＋记录一次开发</button>`:""}${rot.pending?` <button class="btn small danger" onclick="switchToNextContact('${c.id}')">➡ 切换下一联系人</button>`:""} <button class="btn small" onclick="openForm('rfq',null,{clientId:'${c.id}'})">新增RFQ</button> <button class="btn small" onclick="openForm('quote',null,{clientId:'${c.id}'})">新增报价</button></div></div></div>`;
   const contactRows=rot.contacts.map((ct,i)=>{const currentFlag=i===rot.index,cls=currentFlag?"current":ct.replied?"replied":ct.invalid?"invalid":"",st=ct.replied?"已回复":ct.invalid?"无效":ct.status||"未开始",encoded=encodeURIComponent(ct.email);return `<div class="contact-row ${cls}"><div class="contact-row-head"><div><div class="contact-email">${esc(ct.email)} ${currentFlag?badge("当前","green"):""} ${ct.isPrimary?badge("主要联系人","green"):""}</div><div class="contact-meta">${esc([ct.name,ct.title].filter(Boolean).join(" · ")||"未填写姓名/职位")}<br>已联系 ${ct.touchCount||0} 次 · 连续未回复 ${ct.noReplyCount||0} 次 · 最后联系 ${fmtDate(ct.lastContact)}</div></div><div>${badge(st,ct.replied?"green":ct.invalid||ct.noReplyCount>=rot.limit?"red":"orange")}</div></div><div class="contact-actions">${!currentFlag&&!ct.invalid&&!ct.replied?`<button class="btn small" onclick="setCurrentContact('${c.id}','${encoded}')">设为当前</button>`:""}<button class="btn small" onclick="openContactCommunication('${c.id}','${encoded}','我联系客户')">记录沟通</button>${!ct.replied?`<button class="btn small" onclick="openContactCommunication('${c.id}','${encoded}','客户回复')">记录回复</button>`:""}${!ct.invalid&&!ct.replied?`<button class="btn small danger" onclick="markContactInvalid('${c.id}','${encoded}')">退信/无效</button>`:""}</div></div>`;}).join("");
   $("clientContacts").innerHTML=`<div class="contact-workflow"><div class="contact-summary"><div class="contact-kpi"><div class="k">当前开发联系人</div><div class="v">${rot.current?`${rot.index+1}/${rot.contacts.length}`:"0/0"}</div></div><div class="contact-kpi"><div class="k">当前邮箱</div><div class="v">${esc(rot.current?.email||"—")}</div></div><div class="contact-kpi"><div class="k">当前联系次数</div><div class="v">${rot.current?`${rot.current.touchCount||0}/${rot.limit}`:"—"}</div></div><div class="contact-kpi"><div class="k">下一联系人</div><div class="v">${esc(rot.next?contactLabel(rot.next):"—")}</div></div></div>${rot.pending?`<div class="rotation-alert high">⚠️ ${esc(rot.reason)}。${rot.next?`建议切换到下一联系人：${esc(contactLabel(rot.next))}`:`该公司全部可用联系人已开发完，建议进入沉睡客户，稍后再次开发。`}<div style="margin-top:8px"><button class="btn small primary" onclick="switchToNextContact('${c.id}')">${rot.next?"切换下一联系人":"转为沉睡客户"}</button></div></div>`:`<div class="rotation-alert">开发规则：同一联系人连续联系 ${rot.limit} 次仍无回复时，首页和跟进中心会提醒你切换下一联系人；任何联系人回复后，停止轮换并把回复人设为主要联系人。</div>`}<div>${contactRows||empty("暂无邮箱。请编辑客户添加多个邮箱，或从 Excel 导入联系人。")}</div></div>`;
 
   const events=[];
+  rfqs.forEach(x=>events.push({date:x.requestDate,kind:"RFQ",title:`${x.rfqNo||"询价"} · ${x.status||""}`,desc:`${x.itemCount||0}项；${x.customerNeed||x.notes||""}`}));
   comms.forEach(x=>events.push({date:x.date,kind:x.channel||"沟通",title:x.subject||x.direction||"沟通",desc:x.content||""}));
-  quotes.forEach(x=>events.push({date:x.quoteDate,kind:"报价",title:`${x.partNo||"型号"} · ${x.status||""}`,desc:`数量：${x.qty||"—"}；报价：${x.quotePrice||"—"}`}));
+  quotes.forEach(x=>{const batch=Array.isArray(x.items)&&x.items.length;events.push({date:x.quoteDate,kind:"报价",title:batch?`${x.batchName||"批量报价"} · ${x.itemCount||x.items.length}项 · ${x.status||""}`:`${x.partNo||"型号"} · ${x.status||""}`,desc:batch?`Excel批量报价，共 ${x.itemCount||x.items.length} 个型号；${x.priceSummary||x.quotePrice||""}`:`数量：${x.qty||"—"}；报价：${x.quotePrice||"—"}`})});
   orders.forEach(x=>events.push({date:x.piDate,kind:"PI/订单",title:`${x.piNo||"PI"} · ${x.orderStatus||""}`,desc:`金额：${x.amount||0} ${x.currency||state.settings.currency}；付款：${x.paymentStatus||"—"}`}));
+  samples.forEach(x=>events.push({date:x.feedbackDate||x.internationalShipDate||x.forwarderArrivalDate||x.sentDate||x.requestDate,kind:"样品",title:`${x.partNo||x.itemName||"样品"} · ${x.status||""}`,desc:`数量：${x.qty||"—"}；方式：${x.deliveryMode||"—"}；我司寄出：${fmtDate(x.sentDate)}${x.forwarderArrivalDate?`；货代收货：${fmtDate(x.forwarderArrivalDate)}`:""}${x.internationalShipDate?`；国际出运：${fmtDate(x.internationalShipDate)}`:""}；反馈：${x.feedbackResult||"待反馈"}${x.feedback?`；${x.feedback}`:""}`}));
   events.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   $("clientTimeline").innerHTML=events.length?`<div class="timeline">${events.map(e=>`<div class="tl"><div class="date">${fmtDate(e.date)} · ${esc(e.kind)}</div><div class="title">${esc(e.title)}</div><div class="desc">${esc(e.desc)}</div></div>`).join("")}</div>`:empty("暂无历史。");
 
-  $("clientComms").innerHTML=comms.length?comms.map(x=>`<div class="item"><div class="item-title">${esc(x.channel||"沟通")} · ${esc(x.direction||"")}</div><div class="item-meta">${fmtDate(x.date)} · ${esc(x.contactEmail||"")} · ${esc(x.subject||"")}</div><div class="item-meta">${esc(x.content||"")}</div><div style="margin-top:6px"><button class="btn small" onclick="openForm('communication','${x.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('communication','${x.id}')">删除</button></div></div>`).join(""):empty("暂无沟通历史。");
+  $("clientComms").innerHTML=comms.length?comms.map(x=>`<div class="item"><div class="item-title">${esc(x.channel||"沟通")} · ${esc(x.direction||"")}</div><div class="item-meta">${fmtDate(x.date)} · ${esc(x.contactEmail||"")} · ${esc(x.subject||"")}${x.feedbackType?` · ${esc(x.feedbackType)}`:""}</div><div class="item-meta">${esc(x.content||"")}</div><div style="margin-top:6px"><button class="btn small" onclick="openForm('communication','${x.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('communication','${x.id}')">删除</button></div></div>`).join(""):empty("暂无沟通历史。");
   $("addCommBtn").onclick=()=>openForm("communication",null,{clientId:c.id,contactEmail:currentContactInfo(c).current?.email||""});
 
-  $("clientQuotes").innerHTML=quotes.length?`<div class="table-wrap"><table><thead><tr><th>日期</th><th>型号</th><th>数量</th><th>报价</th><th>状态</th></tr></thead><tbody>${quotes.map(q=>`<tr><td>${fmtDate(q.quoteDate)}</td><td>${esc(q.partNo||"")}</td><td>${esc(q.qty||"")}</td><td>${esc(q.quotePrice||"")}</td><td>${esc(q.status||"")}</td></tr>`).join("")}</tbody></table></div>`:empty("暂无报价。");
+  $("clientRfqs").innerHTML=rfqs.length?`<div class="card-head"><h3>RFQ / 询价记录</h3><div class="item-meta">只显示摘要，避免几百个型号把客户详情铺满。</div></div>${rfqs.map(r=>`<div class="item"><div class="item-title">${esc(r.rfqNo||r.subject||"RFQ")} ${badge(r.status||"待处理","orange")}</div><div class="item-meta">${fmtDate(r.requestDate)} · ${r.itemCount||0} 项 · ${esc(r.sourceFile||"")}</div><div class="item-meta">${esc(r.customerNeed||r.notes||"")}</div><div style="margin-top:6px"><button class="btn small" onclick="openForm('rfq','${r.id}')">编辑</button></div></div>`).join("") : empty("暂无 RFQ 记录。");
+
+  const quoteGroups=clientQuoteGroups(quotes);
+  $("clientQuotes").innerHTML=quoteGroups.length?`<div class="card-head"><h3>报价记录</h3><div class="item-meta">客户详情只按“哪天报价了什么”显示摘要，型号明细需要时再展开。</div></div><div>${quoteGroups.map(g=>{const parts=g.items.map(i=>i.partNo).filter(Boolean);const preview=parts.slice(0,4).join("、")+(parts.length>4?` 等 ${parts.length} 个型号`:parts.length?"":"报价");const st=[...new Set(g.status.filter(Boolean))].join(" / ")||"—";return `<div class="item"><div class="item-title">${fmtDate(g.date)} · ${esc(g.source||"报价")}</div><div class="item-meta">${esc(preview)} · 共 ${g.items.length} 项 · ${g.priced}/${g.items.length} 项已有报价 · ${esc(st)}</div><div style="margin-top:6px"><button class="btn small" onclick="openClientQuoteGroup('${c.id}','${encodeURIComponent(g.key).replace(/'/g,'%27')}')">查看型号明细</button></div></div>`}).join("")}</div>`:empty("暂无报价。");
+
+  $("clientSamples").innerHTML=`<div class="card-head"><h3>样品跟进</h3><button class="btn small primary" onclick="openForm('sample',null,{clientId:'${c.id}'})">＋ 新增样品</button></div>${samples.length?samples.map(x=>`<div class="item"><div class="item-title">${esc(x.partNo||x.itemName||"样品")} · ${badge(x.status||"待确认",["测试通过","已结束"].includes(x.status)?"green":["测试未通过","取消"].includes(x.status)?"red":"orange")}</div><div class="item-meta">数量：${esc(x.qty||"—")} · 交付方式：${esc(x.deliveryMode||"—")} · 客户提出：${fmtDate(x.requestDate)}</div><div class="item-meta">我司寄出：${fmtDate(x.sentDate)} · 国内物流：${esc(x.carrier||"—")} ${esc(x.tracking||"")}</div>${x.deliveryMode==="寄客户货代/中国仓"||x.forwarderName||x.forwarderArrivalDate?`<div class="item-meta">客户货代：${esc(x.forwarderName||"—")} · 货代收货：${fmtDate(x.forwarderArrivalDate)} · 预计集货/出运：${fmtDate(x.consolidationDueDate)}</div>`:""}${x.internationalShipDate||x.internationalCarrier||x.internationalTracking?`<div class="item-meta">国际出运：${fmtDate(x.internationalShipDate)} · 国际物流：${esc(x.internationalCarrier||"—")} ${esc(x.internationalTracking||"")}</div>`:""}<div class="item-meta">预计客户收货：${fmtDate(x.expectedArrival)} · 预计反馈：${fmtDate(x.feedbackDueDate)} · 结果：${esc(x.feedbackResult||"待反馈")}</div>${x.feedback?`<div class="item-meta" style="margin-top:4px">客户反馈：${esc(x.feedback)}</div>`:""}${x.nextAction?`<div class="item-meta" style="margin-top:4px"><b>下一步：</b>${esc(x.nextAction)}${x.nextFollowUp?` · ${fmtDate(x.nextFollowUp)}`:""}</div>`:""}<div style="margin-top:6px"><button class="btn small" onclick="openForm('sample','${x.id}')">编辑/记录反馈</button> <button class="btn small danger" onclick="removeEntity('sample','${x.id}')">删除</button></div></div>`).join(""):empty("暂无样品记录。可区分直接寄客户、寄客户货代/中国仓、集货等待、国际出运和测试反馈。")}`;
 
   $("clientFiles").innerHTML=files.length?files.map(f=>`<div class="item"><div class="item-title">${esc(f.name||"附件链接")}</div><div class="item-meta">${esc(f.category||"外部链接")} · ${esc(f.url||"")}</div><div style="margin-top:5px"><a class="btn small" href="${esc(f.url)}" target="_blank" rel="noopener">打开</a> <button class="btn small danger" onclick="removeFile('${f.id}')">删除</button></div></div>`).join(""):empty("暂无附件链接。");
 
   $("addFileLinkBtn").onclick=addClientFileLink;
+  const smart=renderSmartNextStep(c.id);
+  $("saveSmartTaskBtn").onclick=()=>saveSmartNextAsTask(c.id);
   $("generateFollowupBtn").onclick=()=>generateFollowup(c.id);
+  generateFollowup(c.id);
 }
 
 async function addClientFileLink(){
@@ -615,17 +762,112 @@ window.removeFile = async id=>{
   await deleteDoc(doc(db,"users",currentUser.uid,"files",id));
 };
 
+
+function feedbackSignals(text=""){
+  const s=normalizeLooseText(text);
+  const has=(arr)=>arr.some(x=>s.includes(normalizeLooseText(x)));
+  return {
+    price:has(["target price","price","expensive","high price","preço","preco","fiyat","pahalı","pahali","цена","дорого","目标价","价格","太贵"]),
+    later:has(["later","next week","next month","contact later","depois","mais tarde","sonra","gelecek hafta","позже","потом","следующей неделе","以后","下周","下个月","晚点","稍后"]),
+    noNeed:has(["no need","not interested","no demand","não precisa","nao precisa","sem interesse","ihtiyaç yok","ihtiyac yok","не нужно","не интересно","нет потребности","不需要","没需求","暂时不需要"]),
+    sample:has(["sample","test","testing","trial","amostra","teste","numune","test etmek","образец","тест","测试","样品"]),
+    payment:has(["payment","pay","transfer","invoice","ödeme","odeme","оплата","платеж","付款","汇款"]),
+    delivery:has(["lead time","delivery","stock","shipment","teslimat","stok","срок","доставка","налич","交期","库存","物流","发货"])
+  };
+}
+function inferFeedbackType(text){
+  const s=String(text||"").toLowerCase();
+  if(!s.trim())return "其他";
+  if(/target|price|价格|贵|expensive/.test(s))return "价格高/目标价";
+  if(/lead time|交期|delivery time|交货/.test(s))return "交期问题";
+  if(/no stock|out of stock|无货|缺货/.test(s))return "无库存";
+  if(/sample|样品|test|测试/.test(s))return "需要样品";
+  if(/payment|付款|账期|deposit/.test(s))return "付款条件";
+  if(/shipping|logistics|物流|货代|customs/.test(s))return "物流问题";
+  if(/supplier|已有供应商|regular supplier/.test(s))return "已有供应商";
+  if(/project.*pause|暂停|later|以后|稍后|next month/.test(s))return "等待项目";
+  if(/no need|not needed|暂时不需要|没有需求/.test(s))return "暂时无需求";
+  if(/order|po|pi|下单|采购|purchase/.test(s))return "成交信号";
+  return "其他";
+}
+
+function inferCommunicationNextStep(obj){
+  const text=[obj.customerFeedback,obj.content,obj.subject].filter(Boolean).join(" ");
+  const sig=feedbackSignals(text), base=obj.date||todayISO();
+  if(obj.direction==="邮件退信")return{nextAction:"切换下一联系人",nextFollowUp:base};
+  if(["客户回复","双向沟通"].includes(obj.direction)){
+    if(sig.price)return{nextAction:"重新核价，并向客户确认目标价/可接受区间",nextFollowUp:addDays(base,1)};
+    if(sig.sample)return{nextAction:"跟进样品测试结果，并询问下一步批量需求",nextFollowUp:addDays(base,3)};
+    if(sig.payment)return{nextAction:"确认付款安排、付款凭证或内部审批进度",nextFollowUp:addDays(base,1)};
+    if(sig.delivery)return{nextAction:"核实库存/交期/物流后回复客户",nextFollowUp:addDays(base,1)};
+    if(sig.noNeed)return{nextAction:"转长期维护，避免频繁打扰",nextFollowUp:addDays(base,state.settings.dormantDays||30)};
+    if(sig.later)return{nextAction:"按客户要求稍后再联系",nextFollowUp:addDays(base,7)};
+    return{nextAction:"根据客户回复继续推进，确认具体需求/数量/目标价格",nextFollowUp:addDays(base,2)};
+  }
+  return{nextAction:"等待回复；若无回复继续下一次开发",nextFollowUp:addDays(base,state.settings.contactFollowDays||3)};
+}
+function recommendNextStep(clientId){
+  const c=state.clients.find(x=>x.id===clientId);if(!c)return{title:"暂无建议",reason:"没有找到客户资料。",dueDate:todayISO(),priority:"普通"};
+  const comms=state.communications.filter(x=>x.clientId===clientId).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const quotes=state.quotes.filter(x=>x.clientId===clientId).sort((a,b)=>(b.quoteDate||"").localeCompare(a.quoteDate||""));
+  const orders=state.orders.filter(x=>x.clientId===clientId).sort((a,b)=>(b.piDate||"").localeCompare(a.piDate||""));
+  const unpaid=orders.find(o=>["未付款","部分付款"].includes(o.paymentStatus));
+  if(unpaid)return{title:`跟进付款：${unpaid.piNo||"PI"}`,reason:`付款状态为“${unpaid.paymentStatus}”。先确认付款计划、审批障碍或是否需要补充文件。`,dueDate:todayISO(),priority:"高"};
+  const samples=state.samples.filter(x=>x.clientId===clientId).sort((a,b)=>(b.sentDate||b.requestDate||"").localeCompare(a.sentDate||a.requestDate||""));
+  const activeSample=samples.find(x=>!["测试通过","测试未通过","已结束","取消"].includes(x.status||""));
+  if(activeSample){const due=activeSample.nextFollowUp||activeSample.feedbackDueDate||activeSample.expectedArrival||activeSample.consolidationDueDate||todayISO();const what=activeSample.partNo||activeSample.itemName||"样品";let title=`跟进样品：${what}`,reason=`当前样品状态：${activeSample.status||"待确认"}。`;if(["待确认","待寄出"].includes(activeSample.status))reason+=" 先确认样品数量、交付方式和寄出安排。";else if(["已寄出","运输中"].includes(activeSample.status))reason+=activeSample.deliveryMode==="寄客户货代/中国仓"?" 先确认客户货代是否已收货，不要过早询问客户测试结果。":" 查看物流并确认客户是否签收。";else if(["已交客户货代","货代待集货","等待客户安排出运"].includes(activeSample.status))reason+=` 样品目前在客户货代/中国仓${activeSample.forwarderName?`（${activeSample.forwarderName}）`:""}等待与其他货物集货。此阶段重点确认货代收货和出运计划，不应询问客户是否收到样品。`;else if(["已国际出运","国际运输中"].includes(activeSample.status))reason+=" 已进入国际运输，跟踪国际物流并确认最终签收。";else if(["已签收待测试","测试中"].includes(activeSample.status))reason+=" 客户已收到样品，到期后询问测试结果、问题点以及批量需求。";return{title,reason,dueDate:due,priority:due<=todayISO()?"高":"普通"};}
+  const latestFinishedSample=samples.find(x=>["测试通过","测试未通过"].includes(x.status||""));
+  if(latestFinishedSample&&latestFinishedSample.feedbackDate){if(latestFinishedSample.status==="测试通过")return{title:`样品通过，推进批量订单：${latestFinishedSample.partNo||"样品"}`,reason:`客户反馈：${latestFinishedSample.feedback||latestFinishedSample.feedbackResult||"测试通过"}。建议确认正式数量、目标价和交期。`,dueDate:addDays(latestFinishedSample.feedbackDate,1),priority:"高"};if(latestFinishedSample.status==="测试未通过")return{title:`处理样品问题：${latestFinishedSample.partNo||"样品"}`,reason:`客户反馈：${latestFinishedSample.feedback||latestFinishedSample.feedbackResult||"测试未通过"}。先确认失败现象、测试条件，再评估替代或重新送样。`,dueDate:addDays(latestFinishedSample.feedbackDate,1),priority:"高"};}
+  const rot=currentContactInfo(c);
+  if(rot.pending)return{title:rot.next?`切换下一联系人：${contactLabel(rot.next)}`:"转为沉睡客户",reason:rot.next?`${contactLabel(rot.current)} 已${rot.reason}，继续发同一邮箱意义不大。`:`现有可用联系人均已开发完成，建议 ${state.settings.dormantDays||30} 天后重新检查。`,dueDate:todayISO(),priority:"高"};
+  const last=comms[0];
+  if(last&&["客户回复","双向沟通"].includes(last.direction)){
+    const inf=inferCommunicationNextStep(last);
+    return{title:inf.nextAction,reason:`依据最近客户反馈：${(last.customerFeedback||last.content||last.subject||"客户已回复").slice(0,160)}`,dueDate:inf.nextFollowUp,priority:feedbackSignals([last.customerFeedback,last.content].join(" ")).noNeed?"普通":"高"};
+  }
+  const openRfq=state.rfqs.filter(x=>x.clientId===clientId).sort((a,b)=>(b.requestDate||"").localeCompare(a.requestDate||""))[0];
+  if(openRfq && !["已全部报价","客户取消","已结束"].includes(openRfq.status||"")) return {title:`处理RFQ：${openRfq.rfqNo||"客户询价"}`,reason:`当前状态：${openRfq.status||"待报价"}，共 ${openRfq.itemCount||0} 项。先完成找货/报价，并记录无法报价的项目原因。`,dueDate:openRfq.nextFollowUp||todayISO(),priority:"高"};
+  const openQuote=quotes.find(q=>!["成交","丢单","暂停"].includes(q.status));
+  if(openQuote){
+    const due=openQuote.nextFollowUp||(openQuote.quoteDate?addDays(openQuote.quoteDate,state.settings.quoteFollowDays||5):todayISO());
+    const desc=Array.isArray(openQuote.items)?`${openQuote.itemCount||openQuote.items.length} 个型号的批量报价`:(openQuote.partNo||"最近报价");
+    return{title:`跟进报价：${desc}`,reason:"先问客户对价格、交期、规格是否有反馈；如果价格敏感，优先索取 Target Price。",dueDate:due||todayISO(),priority:due&&due<=todayISO()?"高":"普通"};
+  }
+  if(rot.current&&(rot.current.touchCount||0)>0){
+    return{title:`继续第 ${(rot.current.touchCount||0)+1} 次开发：${contactLabel(rot.current)}`,reason:`当前联系人已联系 ${rot.current.touchCount||0}/${rot.limit} 次且暂无回复。`,dueDate:rot.current.nextFollowUp||c.nextFollowUp||addDays(rot.current.lastContact||todayISO(),state.settings.contactFollowDays||3),priority:"普通"};
+  }
+  return{title:`首次开发：${contactLabel(rot.current)||c.company}`,reason:"暂无历史沟通，建议先做第一封简短开发邮件，并记录本次联系。",dueDate:todayISO(),priority:c.grade==="A"?"高":"普通"};
+}
+function renderSmartNextStep(clientId){
+  const n=recommendNextStep(clientId),box=$("smartNextAction");if(!box)return n;
+  box.className="smart-next "+(n.priority==="高"?"high":"");
+  box.innerHTML=`<div class="title">${esc(n.title)}</div><div class="reason">${esc(n.reason)}<br><b>建议日期：</b>${fmtDate(n.dueDate)} · <b>优先级：</b>${esc(n.priority)}</div>`;
+  return n;
+}
+async function saveSmartNextAsTask(clientId){
+  const n=recommendNextStep(clientId);
+  const exists=state.tasks.some(t=>!t.done&&t.clientId===clientId&&t.title===n.title&&t.dueDate===n.dueDate);
+  if(exists)return alert("这条下一步任务已经存在，不重复创建。");
+  await addDoc(refCollection("tasks"),{title:n.title,priority:n.priority==="高"?"高":"普通",dueDate:n.dueDate||todayISO(),clientId,notes:n.reason,source:"智能下一步",done:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+  alert("已把建议保存到任务中心。");
+}
+
 function generateFollowup(clientId){
   const c=state.clients.find(x=>x.id===clientId), comms=state.communications.filter(x=>x.clientId===clientId).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const quotes=state.quotes.filter(x=>x.clientId===clientId).sort((a,b)=>(b.quoteDate||"").localeCompare(a.quoteDate||""));
   const orders=state.orders.filter(x=>x.clientId===clientId).sort((a,b)=>(b.piDate||"").localeCompare(a.piDate||""));
   const unpaid=orders.find(o=>["未付款","部分付款"].includes(o.paymentStatus));
   const openQuote=quotes.find(q=>!["成交","丢单","暂停"].includes(q.status));
+  const samples=state.samples.filter(x=>x.clientId===clientId).sort((a,b)=>(b.sentDate||b.requestDate||"").localeCompare(a.sentDate||a.requestDate||""));
+  const activeSample=samples.find(x=>!["测试通过","测试未通过","已结束","取消"].includes(x.status||""));
   const rot=currentContactInfo(c),ct=rot.current,person=ct?.name||c.contact||"";
   const hello=person?`Dear ${person},`:"Dear Customer,",wh=person?`Hi ${person},`:"Hi,";
   let strategy,email,wa;
 
-  if(unpaid){
+  if(activeSample){
+    const what=activeSample.partNo||activeSample.itemName||"sample";
+    if(["已交客户货代","货代待集货","等待客户安排出运"].includes(activeSample.status)){strategy=`当前样品 ${what} 已到客户货代/中国仓，正在等待与客户其他货物集货。此阶段不要询问客户测试结果，重点确认货代收货及预计国际出运时间。`;email=`Subject: Sample shipment status – ${what}\n\n${hello}\n\nThe sample ${what} has been delivered to your forwarder / China warehouse${activeSample.forwarderName?` (${activeSample.forwarderName})`:""}.\n\nPlease let me know when it is planned to be consolidated with your other goods and shipped internationally. We will keep following the shipment status from our side.\n\nBest regards`;wa=`${wh} The sample ${what} has already been delivered to your forwarder / China warehouse${activeSample.forwarderName?` (${activeSample.forwarderName})`:""}. Please let me know when it is planned to be consolidated and shipped with your other goods.`;}else if(["已国际出运","国际运输中"].includes(activeSample.status)){strategy=`当前样品 ${what} 已国际出运。现在重点跟踪国际物流和最终签收，签收后再安排测试反馈跟进。`;email=`Subject: Sample shipment follow-up – ${what}\n\n${hello}\n\nThe sample ${what} is now in international transit${activeSample.internationalTracking?` (tracking: ${activeSample.internationalTracking})`:""}.\n\nPlease let me know once it arrives. After receipt, I’ll follow up with you regarding the testing result.\n\nBest regards`;wa=`${wh} The sample ${what} is now in international transit${activeSample.internationalTracking?` (${activeSample.internationalTracking})`:""}. Please let me know once it arrives.`;}else{strategy=`当前有样品在跟进：${what}，状态 ${activeSample.status||"待确认"}。优先确认签收/测试结果，不要同时发送普通开发邮件。`;email=`Subject: Follow-up on sample – ${what}\n\n${hello}\n\nI’m following up on the sample ${what}${activeSample.tracking?` (tracking: ${activeSample.tracking})`:""}.\n\nCould you please let me know whether it has arrived and, if testing has started, whether you have any initial feedback?\n\nIf there is any issue during testing, please send me the details and we will check it immediately.\n\nBest regards`;wa=`${wh} I’m following up on the sample ${what}${activeSample.tracking?` (${activeSample.tracking})`:""}. Has it arrived, and have you had a chance to test it? Any feedback is welcome.`;}
+  }else if(unpaid){
     strategy=`高优先级：存在 ${unpaid.piNo||"PI"}，付款状态为 ${unpaid.paymentStatus}。建议先确认付款安排和是否有流程障碍，不重复介绍公司。`;
     email=`Subject: Follow-up on ${unpaid.piNo||"our PI"}\n\n${hello}\n\nJust a quick follow-up regarding ${unpaid.piNo||"the PI"} we sent earlier.\n\nPlease let me know if the payment schedule is clear or if there is anything we should clarify or adjust on our side before you proceed.\n\nBest regards`;
     wa=`${wh} just a quick follow-up regarding ${unpaid.piNo||"the PI"} we sent earlier. Please let me know if the payment arrangement is clear or if there is anything we should clarify on our side.`;
@@ -649,6 +891,9 @@ const excelAliases = {
   country:["国家","客户国家","所在国家","国家地区","国家/地区","国家或地区","country","country name","country/region","country region","region","market","市场","país","pais","país/região","pais/regiao","região","regiao","mercado"],
   city:["城市","city","location"],
   website:["官网","网站","网址","website","web","url","homepage"],
+  ownerSalesperson:["跟进业务员","业务员","销售","负责人","客户负责人","salesperson","sales person","sales rep","sales representative","account manager","owner"],
+  ownerCompany:["我方公司","跟进公司","销售公司","供应商公司","our company","seller company","sales company","supplier company"],
+  ownerEmail:["跟进邮箱","业务员邮箱","销售邮箱","我方邮箱","sales email","seller email","owner email"],
   grade:["客户等级","等级","级别","grade","level","rating"],
   status:["客户状态","开发状态","跟进状态","状态","status","stage"],
   contact:["联系人","联系人姓名","姓名","contact","contact name","name"],
@@ -799,7 +1044,7 @@ function mergeClientData(base,incoming,{fromExcel=false}={}){
   const out={...base},src={...incoming};normalizeClientEmails(out,{includeNotes:true});normalizeClientEmails(src,{includeNotes:true});canonicalizeClientCountry(src);
   const contactMap=new Map();[...getClientContacts(out,{includeNotes:true}),...getClientContacts(src,{includeNotes:true})].forEach(c=>{const k=c.email.toLowerCase();contactMap.set(k,contactMap.has(k)?mergeContactRecord(contactMap.get(k),c):normalizeContactRecord(c));});out.contacts=[...contactMap.values()];
   const baseEmails=getClientEmails(out,{includeNotes:true}),incomingEmails=getClientEmails(src,{includeNotes:true});const allEmails=extractEmails(baseEmails,incomingEmails);out.emails=allEmails;out.email=allEmails[0]||"";const activeCandidate=String(out.currentContactEmail||src.currentContactEmail||"");out.currentContactEmail=allEmails.find(e=>e.toLowerCase()===activeCandidate.toLowerCase())||(out.contacts.find(x=>x.isPrimary||x.replied)||out.contacts.find(x=>!x.invalid)||out.contacts[0])?.email||"";out.contactRotationStatus=out.contactRotationStatus||src.contactRotationStatus||(allEmails.length?"active":"");
-  const fill=["country","city","website","contact","title","phone","whatsapp","linkedin","facebook","telegram","lastContact","nextFollowUp"];
+  const fill=["country","city","website","ownerSalesperson","ownerCompany","ownerEmail","contact","title","phone","whatsapp","linkedin","facebook","telegram","lastContact","nextFollowUp"];
   fill.forEach(k=>{ if(!String(out[k]||"").trim()&&String(src[k]||"").trim()) out[k]=src[k]; });
   if((GRADE_RANK[src.grade]||0)>(GRADE_RANK[out.grade]||0)) out.grade=src.grade;
   if((STATUS_RANK[src.status]??0)>(STATUS_RANK[out.status]??0)) out.status=src.status;
@@ -879,10 +1124,10 @@ async function readExcelFile(file){
     const invalid=rows.length-valid.length;
     excelImportRows=valid;
     if(!valid.length) throw new Error("没有读取到有效客户行。每一行至少需要公司名称。");
-    const mapped=[...new Set(recognized)].map(f=>({company:"公司",country:"国家",city:"城市",website:"官网",grade:"等级",status:"状态",contact:"联系人",title:"职位",email:"Email",phone:"电话",whatsapp:"WhatsApp",linkedin:"LinkedIn",facebook:"Facebook",telegram:"Telegram",lastContact:"最后联系",nextFollowUp:"下次跟进",notes:"备注"}[f]||f));
+    const mapped=[...new Set(recognized)].map(f=>({company:"公司",country:"国家",city:"城市",website:"官网",ownerSalesperson:"跟进业务员",ownerCompany:"我方公司",ownerEmail:"跟进邮箱",grade:"等级",status:"状态",contact:"联系人",title:"职位",email:"Email",phone:"电话",whatsapp:"WhatsApp",linkedin:"LinkedIn",facebook:"Facebook",telegram:"Telegram",lastContact:"最后联系",nextFollowUp:"下次跟进",notes:"备注"}[f]||f));
     showExcelStatus(`已读取 ${file.name}：有效客户 ${valid.length} 行${invalid?`，另有 ${invalid} 行缺少公司名称将跳过`:""}。识别列：${mapped.join("、")}。`);
     $("excelImportBtn").disabled=false;
-    $("excelPreview").innerHTML=`<div class="table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>联系人</th><th>Email</th><th>WhatsApp</th><th>状态</th></tr></thead><tbody>${valid.slice(0,8).map(c=>`<tr><td><b>${esc(c.company)}</b></td><td>${esc(c.country||"")}</td><td>${esc(c.contact||"")}</td><td>${esc(getClientEmails(c,{includeNotes:true}).join("; "))}</td><td>${esc(c.whatsapp||"")}</td><td>${esc(c.status||"")}</td></tr>`).join("")}</tbody></table></div>${valid.length>8?`<div class="item-meta" style="margin-top:6px">仅预览前 8 行，共 ${valid.length} 行。</div>`:""}`;
+    $("excelPreview").innerHTML=`<div class="table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>跟进归属</th><th>联系人</th><th>Email</th><th>WhatsApp</th><th>状态</th></tr></thead><tbody>${valid.slice(0,8).map(c=>`<tr><td><b>${esc(c.company)}</b></td><td>${esc(c.country||"")}</td><td>${esc([c.ownerSalesperson,c.ownerCompany,c.ownerEmail].filter(Boolean).join(" · ")||"")}</td><td>${esc(c.contact||"")}</td><td>${esc(getClientEmails(c,{includeNotes:true}).join("; "))}</td><td>${esc(c.whatsapp||"")}</td><td>${esc(c.status||"")}</td></tr>`).join("")}</tbody></table></div>${valid.length>8?`<div class="item-meta" style="margin-top:6px">仅预览前 8 行，共 ${valid.length} 行。</div>`:""}`;
   }catch(err){ excelImportRows=[];$("excelImportBtn").disabled=true;$("excelPreview").innerHTML="";showExcelStatus("读取失败："+err.message,"err"); }
 }
 $("excelImportBtn")?.addEventListener("click",async()=>{
@@ -919,6 +1164,144 @@ $("excelImportBtn")?.addEventListener("click",async()=>{
   }catch(err){ console.error(err);sync("err","导入失败");$("excelImportBtn").disabled=false;alert("导入失败："+err.message); }
 });
 
+
+// ============================================================
+// 10.1 Excel / CSV 报价批量导入
+// ============================================================
+const quoteAliases={
+  company:["公司名称","客户名称","公司","客户","company","customer","client","buyer"],
+  email:["客户邮箱","邮箱","email","e-mail","mail"],
+  partNo:["型号","料号","型号规格","part no","part number","partno","p/n","pn","mpn","model","item"],
+  brand:["品牌","brand","manufacturer","mfr","maker"],
+  qty:["数量","需求数量","qty","quantity","q'ty"],
+  targetPrice:["目标价","target price","target","tp","targetprice"],
+  quotePrice:["报价","单价","价格","price","unit price","quoted price","usd","报价单价"],
+  currency:["币种","currency","curr"],
+  dc:["dc","date code","datecode","批次"],
+  leadTime:["交期","货期","lead time","leadtime","lt"],
+  status:["状态","status"],
+  quoteDate:["报价日期","日期","date","quote date","quotation date"],
+  notes:["备注","说明","notes","note","remark","remarks"]
+};
+const quoteAliasLookup=(()=>{const m=new Map();Object.entries(quoteAliases).forEach(([f,a])=>a.forEach(x=>m.set(normalizeHeader(x),f)));return m;})();
+function quoteFieldForHeader(h){return quoteAliasLookup.get(normalizeHeader(h))||null}
+function detectQuoteHeaderRow(matrix){
+  let best={idx:0,score:-1,fields:[]};
+  for(let i=0;i<Math.min(matrix.length,15);i++){
+    const fields=(matrix[i]||[]).map(quoteFieldForHeader).filter(Boolean);
+    const score=fields.length+(fields.includes("partNo")?4:0)+(fields.includes("qty")?1:0)+(fields.includes("quotePrice")?1:0);
+    if(score>best.score)best={idx:i,score,fields};
+  }
+  return best;
+}
+function rowToQuoteItem(headers,row){
+  const o={currency:state.settings.currency||"USD",status:"已报价"};
+  headers.forEach((h,i)=>{const f=quoteFieldForHeader(h);if(f&&row[i]!==undefined&&row[i]!==null&&String(row[i]).trim()!=="")o[f]=String(row[i]).trim()});
+  o.partNo=String(o.partNo||"").trim();o.brand=String(o.brand||"").trim();o.qty=String(o.qty||"").trim();o.quoteDate=normalizeDateValue(o.quoteDate);
+  if(!o.quotePrice)o.status=o.status==="已报价"?"待报价":o.status;
+  return o;
+}
+function resetQuoteImport(){
+  quoteImportRows=[];quoteImportFileName="";
+  $("quoteImportBtn").disabled=true;$("quoteImportPreview").innerHTML="";$("quoteImportSummary").innerHTML="";
+  $("quoteImportStatus").textContent="尚未选择文件。";$("quoteFileInput").value="";
+  const sel=$("quoteImportDefaultClient");
+  sel.innerHTML='<option value="">请选择客户</option>'+state.clients.slice().sort((a,b)=>(a.company||"").localeCompare(b.company||"")).map(c=>`<option value="${c.id}">${esc(c.company)} · ${esc(c.country||"")}</option>`).join("");
+  $("quoteImportDate").value=todayISO();
+}
+$("openQuoteImportBtn")?.addEventListener("click",()=>{resetQuoteImport();$("quoteImportModal").classList.add("show")});
+const quoteDrop=$("quoteDropZone");
+quoteDrop?.addEventListener("click",()=>$("quoteFileInput").click());
+["dragenter","dragover"].forEach(evt=>quoteDrop?.addEventListener(evt,e=>{e.preventDefault();e.stopPropagation();quoteDrop.classList.add("dragover")}));
+["dragleave","drop"].forEach(evt=>quoteDrop?.addEventListener(evt,e=>{e.preventDefault();e.stopPropagation();quoteDrop.classList.remove("dragover")}));
+quoteDrop?.addEventListener("drop",e=>{const f=e.dataTransfer?.files?.[0];if(f)readQuoteExcelFile(f)});
+$("quoteFileInput")?.addEventListener("change",e=>{const f=e.target.files?.[0];if(f)readQuoteExcelFile(f)});
+async function readQuoteExcelFile(file){
+  const name=(file.name||"").toLowerCase();if(!/\.(xlsx|xls|csv)$/.test(name)){ $("quoteImportStatus").textContent="不支持这个格式，请选择 .xlsx / .xls / .csv。";return}
+  quoteImportFileName=file.name||"报价表";$("quoteImportStatus").textContent="正在读取报价表……";
+  try{
+    let matrix=[];
+    if(name.endsWith(".csv")){
+      const text=await file.text();
+      if(window.XLSX){const wb=XLSX.read(text,{type:"string"});matrix=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:"",raw:false,blankrows:false})}
+      else matrix=text.split(/\r?\n/).filter(Boolean).map(line=>line.split(","));
+    }else{
+      if(!window.XLSX)throw new Error("Excel解析组件没有加载。请刷新页面后重试。");
+      const data=await file.arrayBuffer(),wb=XLSX.read(data,{type:"array",cellDates:true}),ws=wb.Sheets[wb.SheetNames[0]];
+      matrix=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false,blankrows:false});
+    }
+    if(!matrix.length)throw new Error("报价表为空。");
+    const detected=detectQuoteHeaderRow(matrix),headers=(matrix[detected.idx]||[]).map(x=>String(x||"").trim());
+    const fields=headers.map(quoteFieldForHeader).filter(Boolean);
+    if(!fields.includes("partNo"))throw new Error("没有识别到“型号/料号/Part No/MPN”列。");
+    const rows=matrix.slice(detected.idx+1).map(r=>rowToQuoteItem(headers,r)).filter(x=>x.partNo||x.notes);
+    if(!rows.length)throw new Error("没有读取到有效报价行。");
+    quoteImportRows=rows;
+    const withPrice=rows.filter(x=>x.quotePrice).length,clients=new Set(rows.map(x=>x.company).filter(Boolean));
+    $("quoteImportStatus").textContent=`已读取 ${file.name}：识别表头在第 ${detected.idx+1} 行，共 ${rows.length} 个型号。`;
+    $("quoteImportSummary").innerHTML=`<div><b>${rows.length}</b><br><span class="item-meta">型号行数</span></div><div><b>${withPrice}</b><br><span class="item-meta">已有报价</span></div><div><b>${clients.size||"—"}</b><br><span class="item-meta">表内客户数</span></div><div><b>${fields.length}</b><br><span class="item-meta">识别字段</span></div>`;
+    $("quoteImportPreview").innerHTML=`<div class="table-wrap"><table><thead><tr><th>型号</th><th>品牌</th><th>数量</th><th>目标价</th><th>报价</th><th>DC</th><th>交期</th></tr></thead><tbody>${rows.slice(0,10).map(x=>`<tr><td><b>${esc(x.partNo)}</b></td><td>${esc(x.brand||"")}</td><td>${esc(x.qty||"")}</td><td>${esc(x.targetPrice||"")}</td><td>${esc(x.quotePrice||"")}</td><td>${esc(x.dc||"")}</td><td>${esc(x.leadTime||"")}</td></tr>`).join("")}</tbody></table></div>${rows.length>10?`<div class="item-meta" style="margin-top:6px">仅预览前 10 行，共 ${rows.length} 行。</div>`:""}`;
+    $("quoteImportBtn").disabled=false;
+  }catch(err){quoteImportRows=[];$("quoteImportBtn").disabled=true;$("quoteImportPreview").innerHTML="";$("quoteImportStatus").textContent="读取失败："+err.message}
+}
+function resolveQuoteClient(row,defaultId){
+  if(row.email){
+    const e=extractEmails(row.email)[0]?.toLowerCase();
+    if(e){const hit=state.clients.find(c=>getClientEmails(c,{includeNotes:true}).some(x=>x.toLowerCase()===e));if(hit)return hit}
+  }
+  if(row.company){
+    const key=normalizeCompanyKey(row.company),hit=state.clients.find(c=>normalizeCompanyKey(c.company)===key);if(hit)return hit;
+  }
+  return state.clients.find(c=>c.id===defaultId)||null;
+}
+function packQuoteItems(items,maxItems=500,maxBytes=700000){
+  const chunks=[];let cur=[];
+  for(const item of items){
+    const trial=[...cur,item],size=new Blob([JSON.stringify(trial)]).size;
+    if(cur.length&&(trial.length>maxItems||size>maxBytes)){chunks.push(cur);cur=[item]}else cur=trial;
+  }
+  if(cur.length)chunks.push(cur);return chunks;
+}
+$("quoteImportBtn")?.addEventListener("click",async()=>{
+  if(!quoteImportRows.length)return;
+  const defaultId=$("quoteImportDefaultClient").value,defaultDate=$("quoteImportDate").value||todayISO();
+  const groups=new Map();let skipped=0;
+  quoteImportRows.forEach(row=>{const c=resolveQuoteClient(row,defaultId);if(!c){skipped++;return}if(!groups.has(c.id))groups.set(c.id,[]);groups.get(c.id).push(row)});
+  if(!groups.size)return alert("没有匹配到客户。请选择“默认客户”，或在报价表中加入客户名称/邮箱。");
+  const total=[...groups.values()].reduce((n,a)=>n+a.length,0);
+  if(!confirm(`准备导入 ${total} 个型号，匹配 ${groups.size} 家客户${skipped?`，另有 ${skipped} 行因找不到客户将跳过`:""}。继续吗？`))return;
+  sync("busy","正在导入批量报价…");$("quoteImportBtn").disabled=true;
+  try{
+    let docs=0;
+    for(const [clientId,items] of groups){
+      const chunks=packQuoteItems(items);
+      for(let i=0;i<chunks.length;i++){
+        const part=chunks[i],priced=part.filter(x=>x.quotePrice).length,currencies=[...new Set(part.map(x=>x.currency).filter(Boolean))];
+        const brands=[...new Set(part.map(x=>x.brand).filter(Boolean))];
+        const quoteDate=part.map(x=>x.quoteDate).filter(Boolean).sort()[0]||defaultDate;
+        await addDoc(refCollection("quotes"),{
+          clientId,batchImport:true,batchName:`${quoteImportFileName}${chunks.length>1?` · 第${i+1}/${chunks.length}部分`:""}`,
+          sourceFile:quoteImportFileName,itemCount:part.length,items:part,
+          partNo:`${part[0]?.partNo||"批量报价"} 等 ${part.length} 项`,
+          brand:brands.length===1?brands[0]:"多品牌",qty:`${part.length}项`,
+          quotePrice:priced?`${priced}/${part.length}项已报价`:"待报价",priceSummary:priced?`${priced}/${part.length} 项已有价格`:"待报价",
+          currency:currencies.length===1?currencies[0]:(state.settings.currency||"USD"),
+          status:priced===part.length?"已报价":priced?"报价中":"待报价",quoteDate,nextFollowUp:addDays(quoteDate,state.settings.quoteFollowDays||5),
+          notes:`Excel批量导入：${quoteImportFileName}`,createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+        });docs++;
+      }
+    }
+    sync("ok","已自动同步");alert(`报价导入完成：${total} 个型号，保存为 ${docs} 份批量报价记录${skipped?`；跳过 ${skipped} 行`:""}。`);closeModal("quoteImportModal");
+  }catch(err){console.error(err);sync("err","导入失败");$("quoteImportBtn").disabled=false;alert("报价导入失败："+err.message)}
+});
+window.openQuoteBatch=id=>{
+  const q=state.quotes.find(x=>x.id===id);if(!q||!Array.isArray(q.items))return;
+  $("quoteBatchTitle").textContent=q.batchName||"批量报价明细";$("quoteBatchSub").textContent=`${clientName(q.clientId)} · ${fmtDate(q.quoteDate)} · ${q.items.length} 项`;
+  $("quoteBatchBody").innerHTML=`<div class="table-wrap"><table><thead><tr><th>#</th><th>型号</th><th>品牌</th><th>数量</th><th>Target Price</th><th>报价</th><th>币种</th><th>DC</th><th>交期</th><th>备注</th></tr></thead><tbody>${q.items.map((x,i)=>`<tr><td>${i+1}</td><td><b>${esc(x.partNo||"")}</b></td><td>${esc(x.brand||"")}</td><td>${esc(x.qty||"")}</td><td>${esc(x.targetPrice||"")}</td><td>${esc(x.quotePrice||"")}</td><td>${esc(x.currency||"")}</td><td>${esc(x.dc||"")}</td><td>${esc(x.leadTime||"")}</td><td>${esc(x.notes||"")}</td></tr>`).join("")}</tbody></table></div>`;
+  $("quoteBatchModal").classList.add("show");
+};
+
+
 // V3.1.3：清理已经存在的重复客户，并补全可推断国家；关联记录自动改到保留客户
 $("cleanClientsBtn")?.addEventListener("click",async()=>{
   if(!state.clients.length){alert("当前没有客户需要清理。");return}
@@ -948,7 +1331,7 @@ $("cleanClientsBtn")?.addEventListener("click",async()=>{
   if(!confirm(`检测到 ${dups.reduce((n,g)=>n+g.length-1,0)} 条重复客户需要合并；约 ${emailRepairable} 家客户可修复/补全多邮箱；另有约 ${inferable} 条客户可自动补全国家。\n\n系统会保留资料更完整的一条，并把同一公司的所有邮箱合并保留。报价、PI、沟通、任务、附件也会关联到保留客户。确认继续吗？`))return;
   sync("busy","正在清理客户数据…");
   try{
-    const relationSets=[state.communications,state.quotes,state.orders,state.tasks,state.files];
+    const relationSets=[state.communications,state.quotes,state.orders,state.samples,state.tasks,state.files];
     const ops=[]; const duplicateIds=new Set(); let repairedEmails=0;
     const completeness=c=>["country","city","website","contact","title","phone","whatsapp","linkedin","facebook","telegram","notes","nextFollowUp","lastContact"].reduce((n,k)=>n+(String(c[k]||"").trim()?1:0),0)+getClientEmails(c,{includeNotes:true}).length+relationSets.reduce((n,arr)=>n+arr.filter(x=>x.clientId===c.id).length*2,0);
     for(const group of dups){
@@ -957,7 +1340,7 @@ $("cleanClientsBtn")?.addEventListener("click",async()=>{
       canonicalizeClientCountry(merged);
       ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,"clients",keeper.id),data:{...merged,updatedAt:serverTimestamp()}});
       for(const d of sorted.slice(1)){
-        for(const arr of relationSets){ for(const item of arr.filter(x=>x.clientId===d.id)){ const coll=pathFor(arr===state.communications?"communication":arr===state.quotes?"quote":arr===state.orders?"order":arr===state.tasks?"task":"file"); ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,coll,item.id),data:{clientId:keeper.id,updatedAt:serverTimestamp()}}); } }
+        for(const arr of relationSets){ for(const item of arr.filter(x=>x.clientId===d.id)){ const coll=pathFor(arr===state.communications?"communication":arr===state.quotes?"quote":arr===state.orders?"order":arr===state.samples?"sample":arr===state.tasks?"task":"file"); ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,coll,item.id),data:{clientId:keeper.id,updatedAt:serverTimestamp()}}); } }
         ops.push({kind:"delete",ref:doc(db,"users",currentUser.uid,"clients",d.id)});
       }
     }
@@ -1001,7 +1384,9 @@ $("globalSearch").addEventListener("input",()=>{
   const q=$("globalSearch").value.trim().toLowerCase(); if(!q){$("searchResults").classList.remove("show");return}
   const items=[];
   state.clients.forEach(x=>items.push({type:"client",id:x.id,title:x.company,meta:`客户 · ${x.country||""} · ${x.contact||""}`,text:Object.values(x).join(" ")}));
-  state.quotes.forEach(x=>items.push({type:"quote",id:x.id,title:x.partNo||"报价",meta:`报价 · ${clientName(x.clientId)}`,text:Object.values(x).join(" ")+" "+clientName(x.clientId)}));
+  state.rfqs.forEach(x=>items.push({type:"rfq",id:x.id,title:x.rfqNo||"RFQ",meta:`RFQ · ${clientName(x.clientId)} · ${x.status||""}`,text:[x.parts,x.customerNeed,x.notes,x.sourceFile,clientName(x.clientId)].join(" ")}));
+  state.samples.forEach(x=>items.push({type:"sample",id:x.id,title:x.partNo||"样品",meta:`样品 · ${clientName(x.clientId)} · ${x.status||""}`,text:[x.tracking,x.internationalTracking,x.forwarderName,x.feedback,x.notes,clientName(x.clientId)].join(" ")}));
+  state.quotes.forEach(x=>{const detail=Array.isArray(x.items)?x.items.map(i=>[i.partNo,i.brand,i.qty,i.quotePrice,i.targetPrice,i.notes].filter(Boolean).join(" ")).join(" "):"";items.push({type:"quote",id:x.id,title:x.batchName||x.partNo||"报价",meta:`报价 · ${clientName(x.clientId)}`,text:Object.values(x).filter(v=>typeof v!=="object").join(" ")+" "+detail+" "+clientName(x.clientId)})});
   state.orders.forEach(x=>items.push({type:"order",id:x.id,title:x.piNo||"PI",meta:`订单 · ${clientName(x.clientId)}`,text:Object.values(x).join(" ")+" "+clientName(x.clientId)}));
   state.communications.forEach(x=>items.push({type:"communication",id:x.id,title:x.subject||x.content?.slice(0,28)||"沟通",meta:`沟通 · ${clientName(x.clientId)} · ${x.channel||""}`,text:Object.values(x).join(" ")+" "+clientName(x.clientId)}));
   const r=items.filter(x=>(x.title+" "+x.meta+" "+x.text).toLowerCase().includes(q)).slice(0,20);
@@ -1026,7 +1411,7 @@ $("migrationFile").addEventListener("change",async e=>{
     const obj=JSON.parse(await f.text());
     if(!Array.isArray(obj.clients)) throw new Error("不是有效的 V2.1 备份");
     migrationPayload=obj;
-    $("migrationPreview").innerHTML=`<div class="notice">检测到：客户 ${obj.clients?.length||0}、沟通 ${obj.communications?.length||0}、报价 ${obj.quotes?.length||0}、PI/订单 ${obj.orders?.length||0}、任务 ${obj.tasks?.length||0}、节假日 ${obj.holidays?.length||0}。</div>`;
+    $("migrationPreview").innerHTML=`<div class="notice">检测到：客户 ${obj.clients?.length||0}、沟通 ${obj.communications?.length||0}、RFQ ${obj.rfqs?.length||0}、报价 ${obj.quotes?.length||0}、PI/订单 ${obj.orders?.length||0}、样品 ${obj.samples?.length||0}、任务 ${obj.tasks?.length||0}、节假日 ${obj.holidays?.length||0}。</div>`;
     $("migrationBtn").disabled=false;
   }catch(err){
     migrationPayload=null;$("migrationBtn").disabled=true;alert("读取失败："+err.message);
@@ -1036,7 +1421,7 @@ $("migrationBtn").addEventListener("click",async()=>{
   if(!migrationPayload)return;
   if(!confirm("将旧版数据导入到当前 Google 账号云端。确认继续吗？"))return;
   sync("busy","正在迁移数据…");
-  const mapping=[["clients","clients"],["communications","communications"],["quotes","quotes"],["orders","orders"],["tasks","tasks"],["holidays","holidays"]];
+  const mapping=[["clients","clients"],["communications","communications"],["rfqs","rfqs"],["quotes","quotes"],["orders","orders"],["samples","samples"],["tasks","tasks"],["holidays","holidays"]];
   for(const [source,target] of mapping){
     const arr=migrationPayload[source]||[];
     // Firestore batch 每批最多建议 400 左右，避免接近 500 上限
@@ -1062,20 +1447,23 @@ $("migrationBtn").addEventListener("click",async()=>{
 // ============================================================
 function renderSettings(){
   $("setQuoteDays").value=state.settings.quoteFollowDays??5;
+  if($("setRfqDays")) $("setRfqDays").value=state.settings.rfqFollowDays??2;
   $("setDormantDays").value=state.settings.dormantDays??30;
   if($("setContactNoReplyLimit")) $("setContactNoReplyLimit").value=state.settings.contactNoReplyLimit??3;
   if($("setContactFollowDays")) $("setContactFollowDays").value=state.settings.contactFollowDays??3;
   $("setWeekend").value=String(state.settings.weekendFollow??false);
   $("setCurrency").value=state.settings.currency||"USD";
   if($("setBackupReminderDays")) $("setBackupReminderDays").value=String(state.settings.backupReminderDays??7);
+  if($("setSalesProfiles")) $("setSalesProfiles").value=state.settings.salesProfilesText||"";
   renderBackupStatus();
+  renderExportLogs();
 }
 $("saveSettingsBtn").addEventListener("click",async()=>{
   const data={
-    quoteFollowDays:Number($("setQuoteDays").value||5),dormantDays:Number($("setDormantDays").value||30),
+    quoteFollowDays:Number($("setQuoteDays").value||5),rfqFollowDays:Number($("setRfqDays")?.value||2),dormantDays:Number($("setDormantDays").value||30),
     contactNoReplyLimit:Number($("setContactNoReplyLimit")?.value||3),contactFollowDays:Number($("setContactFollowDays")?.value||3),
     weekendFollow:$("setWeekend").value==="true",currency:$("setCurrency").value,
-    backupReminderDays:Number($("setBackupReminderDays")?.value||7)
+    backupReminderDays:Number($("setBackupReminderDays")?.value||7),salesProfilesText:String($("setSalesProfiles")?.value||"").trim()
   };
   await setDoc(doc(db,"users",currentUser.uid,"settings","main"),data,{merge:true});
   alert("设置已同步。");
@@ -1105,32 +1493,79 @@ function backupFileName(){
 function buildBackupPayload(){
   return backupPlain({
     backupFormat:"AI-Trade-Workspace-Full-Backup",
-    version:"V3.1.5",
+    version:"V3.2.1",
     exportedAt:new Date().toISOString(),
     account:{email:currentUser?.email||"",uid:currentUser?.uid||""},
     clients:state.clients,
     communications:state.communications,
+    rfqs:state.rfqs,
     quotes:state.quotes,
     orders:state.orders,
     tasks:state.tasks,
     holidays:state.holidays,
     holidayCountries:state.holidayCountries,
     files:state.files,
+    samples:state.samples,
+    exportLogs:state.exportLogs,
     settings:state.settings
   });
 }
+
+function exportCountSummary(){
+  const quoteItems=state.quotes.reduce((n,q)=>n+(Array.isArray(q.items)?q.items.length:1),0);
+  return `客户${state.clients.length} · 沟通${state.communications.length} · RFQ${state.rfqs.length} · 报价型号${quoteItems} · PI/订单${state.orders.length} · 样品${state.samples.length} · 任务${state.tasks.length}`;
+}
+async function recordExportLog(type,fileName){
+  try{
+    await addDoc(refCollection("exportLogs"),{type,fileName,summary:exportCountSummary(),exportedAt:new Date().toISOString(),createdAt:serverTimestamp()});
+  }catch(e){console.warn("export log",e)}
+}
+function renderExportLogs(){
+  const el=$("exportLogList");if(!el)return;
+  const rows=state.exportLogs.slice().sort((a,b)=>String(b.exportedAt||"").localeCompare(String(a.exportedAt||""))).slice(0,20);
+  el.innerHTML=rows.length?rows.map(x=>{const d=new Date(x.exportedAt||"");const when=Number.isNaN(d.getTime())?(x.exportedAt||""):`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;return `<div class="export-log"><div><b>${esc(x.type||"导出")}</b><div class="item-meta">${esc(x.fileName||"")}</div></div><div style="text-align:right"><div>${esc(when)}</div><div class="item-meta">${esc(x.summary||"")}</div></div></div>`}).join(""):"暂无导出记录。";
+}
+function downloadBlob(blob,fileName){
+  const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=fileName;a.style.display="none";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+}
+function businessExcelFileName(){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  return `AI外贸工作台_业务数据_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.xlsx`;
+}
+function exportBusinessExcel(){
+  if(!currentUser)return alert("请先登录。");
+  if(!window.XLSX)return alert("Excel组件没有加载，请刷新页面后重试。");
+  try{
+    const wb=XLSX.utils.book_new();
+    const clients=state.clients.map(c=>({客户:c.company||"",国家:c.country||"",城市:c.city||"",跟进业务员:c.ownerSalesperson||"",我方公司:c.ownerCompany||"",跟进邮箱:c.ownerEmail||"",等级:c.grade||"",状态:c.status||"",客户类型:c.customerType||"",行业:c.industry||"",开发来源:c.source||"",联系人:c.contact||"",邮箱:getClientEmails(c,{includeNotes:true}).join("; "),电话:c.phone||"",WhatsApp:c.whatsapp||"",官网:c.website||"",采购特点痛点:c.procurementPain||"",付款习惯:c.paymentHabit||"",物流习惯:c.logisticsHabit||"",价格敏感度:c.priceSensitivity||"",最后联系:c.lastContact||"",下次跟进:c.nextFollowUp||"",备注:c.notes||""}));
+    const rfqs=state.rfqs.map(r=>({日期:r.requestDate||"",客户:clientName(r.clientId),RFQ:r.rfqNo||"",型号数:r.itemCount||0,主要型号:r.parts||"",状态:r.status||"",客户需求:r.customerNeed||"",原始文件:r.sourceFile||"",下次跟进:r.nextFollowUp||"",备注:r.notes||""}));
+    const comms=state.communications.map(x=>({日期:x.date||"",客户:clientName(x.clientId),邮箱:x.contactEmail||"",渠道:x.channel||"",方向:x.direction||"",主题:x.subject||"",沟通内容:x.content||"",反馈类型:x.feedbackType||"",客户反馈:x.customerFeedback||"",下一步:x.nextAction||"",下次跟进:x.nextFollowUp||""}));
+    const quotes=[];
+    state.quotes.forEach(q=>{
+      if(Array.isArray(q.items)&&q.items.length)q.items.forEach((i,idx)=>quotes.push({报价日期:q.quoteDate||"",客户:clientName(q.clientId),报价单:q.batchName||"",序号:idx+1,型号:i.partNo||"",品牌:i.brand||"",数量:i.qty||"",目标价:i.targetPrice||"",报价:i.quotePrice||"",币种:i.currency||q.currency||"",DC:i.dc||"",交期:i.leadTime||"",状态:i.status||q.status||"",备注:i.notes||""}));
+      else quotes.push({报价日期:q.quoteDate||"",客户:clientName(q.clientId),报价单:"",序号:1,型号:q.partNo||"",品牌:q.brand||"",数量:q.qty||"",目标价:q.targetPrice||"",报价:q.quotePrice||"",币种:q.currency||"",DC:q.dc||"",交期:q.leadTime||"",状态:q.status||"",备注:q.notes||""});
+    });
+    const orders=state.orders.map(o=>({PI:o.piNo||"",客户:clientName(o.clientId),金额:o.amount||0,币种:o.currency||"",付款方式:o.paymentTerms||"",应付首款:o.depositDue||0,已付:o.paidAmount||0,待付余额:o.balanceDue||0,承诺付款:o.promisedPayDate||"",付款状态:o.paymentStatus||"",订单状态:o.orderStatus||"",PI日期:o.piDate||"",交期:o.deliveryDate||"",运输方式:o.shippingMode||"",货代:o.forwarder||"",交中国仓:o.chinaWarehouseDate||"",国际出运:o.internationalShipDate||"",物流:o.shipping||"",运单号:o.tracking||"",清关状态:o.customsStatus||"",预计到达:o.expectedArrival||"",实际签收:o.receivedDate||"",备注:o.notes||""}));
+    const samples=state.samples.map(x=>({客户:clientName(x.clientId),样品型号:x.partNo||x.itemName||"",数量:x.qty||"",交付方式:x.deliveryMode||"",客户提出日期:x.requestDate||"",我司寄出日期:x.sentDate||"",国内物流:x.carrier||"",国内运单号:x.tracking||"",客户货代:x.forwarderName||"",货代收货日期:x.forwarderArrivalDate||"",预计集货出运日期:x.consolidationDueDate||"",国际出运日期:x.internationalShipDate||"",国际物流:x.internationalCarrier||"",国际运单号:x.internationalTracking||"",状态:x.status||"",预计客户收货:x.expectedArrival||"",预计反馈:x.feedbackDueDate||"",实际反馈日期:x.feedbackDate||"",反馈结论:x.feedbackResult||"",客户反馈:x.feedback||"",下一步:x.nextAction||"",下次跟进:x.nextFollowUp||"",备注:x.notes||""}));
+    const tasks=state.tasks.map(t=>({任务:t.title||"",优先级:t.priority||"",到期日期:t.dueDate||"",客户:t.clientId?clientName(t.clientId):"",完成:t.done?"是":"否",备注:t.notes||""}));
+    [["客户",clients],["沟通",comms],["RFQ询价",rfqs],["报价明细",quotes],["PI订单",orders],["样品跟进",samples],["任务",tasks]].forEach(([name,rows])=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),name));
+    const fileName=businessExcelFileName();XLSX.writeFile(wb,fileName);
+    recordExportLog("业务数据 Excel",fileName);
+    alert("业务数据 Excel 已导出。浏览器通常会保存到“下载”文件夹；导出记录已写入设置页。");
+  }catch(err){console.error(err);alert("导出 Excel 失败："+(err?.message||err))}
+}
+
 async function exportFullBackup(){
   if(!currentUser) return alert("请先登录后再备份。");
   try{
     const payload=buildBackupPayload();
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json;charset=utf-8"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    a.href=url;a.download=backupFileName();a.style.display="none";document.body.appendChild(a);a.click();a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    const fileName=backupFileName();
+    downloadBlob(blob,fileName);
     const now=new Date().toISOString();
     await setDoc(doc(db,"users",currentUser.uid,"settings","main"),{lastBackupAt:now},{merge:true});
     state.settings.lastBackupAt=now;
+    await recordExportLog("JSON全量备份",fileName);
     sessionStorage.setItem("backupBannerDismissed","");
     renderBackupStatus();
     alert("全量备份已生成。请把下载的 JSON 文件保存在电脑，并建议再复制一份到网盘。");
@@ -1167,6 +1602,7 @@ function renderBackupStatus(){
 }
 function checkBackupReminder(){renderBackupStatus()}
 $("exportFullBackupBtn")?.addEventListener("click",exportFullBackup);
+$("exportBusinessExcelBtn")?.addEventListener("click",exportBusinessExcel);
 $("backupNowBannerBtn")?.addEventListener("click",exportFullBackup);
 $("dismissBackupBannerBtn")?.addEventListener("click",()=>{sessionStorage.setItem("backupBannerDismissed","1");renderBackupStatus()});
 
@@ -1193,14 +1629,14 @@ function localAnswer(q){
     const a=f.filter(x=>x.type==="quote");
     return a.length?"需要跟进的报价：\n"+a.map((x,i)=>`${i+1}. ${x.title} · ${x.meta}`).join("\n"):"当前没有到期报价。";
   }
-  return `当前云端有 ${state.clients.length} 家客户、${state.communications.length} 条沟通记录、${state.quotes.length} 条报价、${state.orders.length} 个 PI/订单。`;
+  return `当前云端有 ${state.clients.length} 家客户、${state.communications.length} 条沟通记录、${state.rfqs.length} 个 RFQ、${state.quotes.length} 份报价、${state.orders.length} 个 PI/订单。`;
 }
 
 // ============================================================
 // 14. 帮助、弹窗、PWA
 // ============================================================
 const helpText={
-  followups:"首页会综合 PI 付款状态、报价下次跟进日期和客户下次跟进日期自动排序。",
+  followups:"首页会综合 RFQ、报价、样品、PI付款状态、联系人轮换和客户下次跟进日期自动排序。",
   tasks:"任务中心用于管理每日开发、WhatsApp、Facebook 和客户跟进任务。",
   files:"V3 免费版不使用 Firebase Storage。把 PI、报价、Datasheet、图片等上传到 Google Drive / OneDrive / WPS 云盘，再把共享链接保存到客户档案，链接会在电脑和手机之间自动同步。",
 };

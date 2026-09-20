@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#4f9f68">
-  <meta name="description" content="个人AI外贸工作台 V3.1.6 免费版 云同步版">
+  <meta name="description" content="个人AI外贸工作台 V3.2.1 免费版 云同步版">
   <link rel="manifest" href="./manifest.webmanifest">
-  <title>个人AI外贸工作台 V3.1.6 免费版</title>
+  <title>个人AI外贸工作台 V3.2.1 免费版</title>
   <style>
     :root{
       --bg:#f4fbf6;--panel:#fff;--soft:#eef9f1;--primary:#4f9f68;--primary-dark:#34744c;
@@ -70,8 +70,24 @@
     }
     @media(max-width:1000px){.cols-4{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:820px){.app{grid-template-columns:1fr}.sidebar{position:fixed;left:0;top:0;width:min(82vw,290px);transform:translateX(-105%);transition:.22s;box-shadow:10px 0 30px rgba(39,72,49,.15)}.sidebar.open{transform:none}.menu{display:block}.content{padding:11px}.cols-3,.cols-2{grid-template-columns:1fr}.account-name{display:none}}
+
+    .pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted)}
+    .quote-batch{font-size:11px;color:var(--green);font-weight:700}
+    .smart-next{border:1px solid var(--line);background:#fbfffc;border-radius:12px;padding:12px;margin-bottom:12px}
+    .smart-next.high{border-color:#e8b5ae;background:#fff8f7}
+    .smart-next .title{font-weight:800;font-size:15px}
+    .smart-next .reason{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.6}
+    .export-log{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:12px}
+    .export-log:last-child{border-bottom:0}
+    .quote-import-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+    .quote-import-summary>div{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:9px}
+    @media(max-width:820px){.quote-import-summary{grid-template-columns:1fr 1fr}}
+
     @media(max-width:540px){.cols-4{grid-template-columns:1fr}.page-head{flex-direction:column}.form-grid{grid-template-columns:1fr}.field.full{grid-column:auto}.page-head h2{font-size:20px}}
-  </style>
+  
+    .stage-strip{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-bottom:13px}.stage-step{border:1px solid var(--border);background:#fff;border-radius:11px;padding:9px;text-align:center;font-size:10px;color:var(--muted)}.stage-step.active{background:var(--soft);border-color:#b9dbc3;color:var(--primary-dark);font-weight:800}.stage-step.done{background:#f5faf6;color:#4e7258}.summary-box{border:1px solid #cae3d1;background:linear-gradient(135deg,#f4fbf6,#fff);border-radius:14px;padding:13px;margin-bottom:12px}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.summary-kpi{background:#fff;border:1px solid var(--border);border-radius:10px;padding:9px}.summary-kpi .k{font-size:9px;color:var(--muted)}.summary-kpi .v{font-size:11px;font-weight:800;margin-top:3px;word-break:break-word}.report-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}.report-card{background:#fff;border:1px solid var(--border);border-radius:13px;padding:13px}.report-card .num{font-size:24px;font-weight:850;margin-top:4px}.report-card .lbl{font-size:10px;color:var(--muted)}.progress{height:7px;background:#edf3ef;border-radius:99px;overflow:hidden}.progress>i{display:block;height:100%;background:var(--primary)}
+    @media(max-width:820px){.summary-grid,.report-grid,.stage-strip{grid-template-columns:1fr 1fr}}
+</style>
 </head>
 <body>
 
@@ -79,7 +95,7 @@
 <section id="loginScreen" class="login">
   <div class="login-card">
     <div class="big-logo">AI</div>
-    <h1>个人AI外贸工作台 V3.1.6 免费版</h1>
+    <h1>个人AI外贸工作台 V3.2.1 免费版</h1>
     <p>电脑和手机使用同一个网址。登录同一个 Google 账号后，客户、报价、PI、历史沟通、任务和附件自动同步。</p>
     <button class="btn primary" id="googleLoginBtn">使用 Google 登录</button>
     <div class="notice" style="margin-top:14px;text-align:left">
@@ -91,14 +107,16 @@
 <!-- 主应用 -->
 <div id="workspaceApp" class="app" style="display:none">
   <aside class="sidebar" id="sidebar">
-    <div class="brand"><div class="logo">AI</div><div><h1>外贸工作台 V3.1.6 免费版</h1><p>云同步 · 手机/电脑共用</p></div></div>
+    <div class="brand"><div class="logo">AI</div><div><h1>外贸工作台 V3.2.1 免费版</h1><p>云同步 · 手机/电脑共用</p></div></div>
     <nav class="nav">
       <button class="active" data-page="dashboard">🏠 首页</button>
       <button data-page="clients">👥 客户中心</button>
       <button data-page="followups">🔔 跟进中心</button>
+      <button data-page="rfqs">📥 RFQ / 询价</button>
       <button data-page="quotes">💰 报价中心</button>
       <button data-page="orders">📄 PI / 订单</button>
       <button data-page="tasks">✅ 任务中心</button>
+      <button data-page="review">📊 周报 / 月报</button>
       <button data-page="holidays">🌍 节假日</button>
       <button data-page="assistant">🤖 AI助手</button>
       <button data-page="migration">🔄 V2.1迁移</button>
@@ -132,8 +150,8 @@
 
       <section class="page" id="page-clients">
         <div class="page-head"><div><h2>客户中心</h2><p>客户是所有报价、PI、沟通、附件和跟进的核心。</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn soft" id="openExcelImportBtn">📥 Excel拖入导入</button><button class="btn soft" id="cleanClientsBtn">🧹 清理重复/修复联系人/补全国家</button><button class="btn primary" onclick="openForm('client')">＋ 新增客户</button></div></div>
-        <div class="toolbar"><input id="clientFilter" placeholder="筛选公司/国家/联系人"><select id="clientStatusFilter"><option value="">全部状态</option></select></div>
-        <div class="card"><div class="table-wrap client-table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>联系人</th><th>状态</th><th>等级</th><th>下次跟进</th><th>操作</th></tr></thead><tbody id="clientTable"></tbody></table></div></div>
+        <div class="toolbar"><input id="clientFilter" placeholder="筛选公司/国家/联系人/业务员"><select id="clientStatusFilter"><option value="">全部状态</option></select><select id="clientOwnerFilter"><option value="">全部业务员</option></select><select id="clientOurCompanyFilter"><option value="">全部我方公司</option></select></div>
+        <div class="card"><div class="table-wrap client-table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>跟进归属</th><th>联系人</th><th>状态</th><th>等级</th><th>下次跟进</th><th>操作</th></tr></thead><tbody id="clientTable"></tbody></table></div><div id="clientPager" class="pager"></div></div>
       </section>
 
       <section class="page" id="page-followups">
@@ -141,9 +159,15 @@
         <div class="grid cols-3"><div class="card"><h3>🔴 高优先级</h3><div id="highFollow"></div></div><div class="card"><h3>🟠 正常跟进</h3><div id="normalFollow"></div></div><div class="card"><h3>🟢 长期维护</h3><div id="longFollow"></div></div></div>
       </section>
 
+
+      <section class="page" id="page-rfqs">
+        <div class="page-head"><div><h2>RFQ / 询价中心</h2><p>把“客户问了什么”与“我们报了什么”分开管理。一个 RFQ 可以包含很多型号，客户详情只显示摘要。</p></div><button class="btn primary" onclick="openForm('rfq')">＋ 新增RFQ</button></div>
+        <div class="card"><div class="table-wrap"><table><thead><tr><th>客户</th><th>RFQ编号/主题</th><th>日期</th><th>型号数</th><th>状态</th><th>客户需求/重点</th><th>下次跟进</th><th>操作</th></tr></thead><tbody id="rfqTable"></tbody></table></div></div>
+      </section>
+
       <section class="page" id="page-quotes">
-        <div class="page-head"><div><h2>报价中心</h2><p>型号、数量、目标价、报价、交期、状态和跟进日期。</p></div><button class="btn primary" onclick="openForm('quote')">＋ 新增报价</button></div>
-        <div class="card"><div class="table-wrap"><table><thead><tr><th>客户</th><th>型号</th><th>品牌</th><th>数量</th><th>报价</th><th>状态</th><th>下次跟进</th><th>操作</th></tr></thead><tbody id="quoteTable"></tbody></table></div></div>
+        <div class="page-head"><div><h2>报价中心</h2><p>支持单条报价，也支持把客户几百行的 Excel 报价表一次导入；批量报价按“报价单”保存，减少云端读写。</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn soft" id="openQuoteImportBtn">📥 Excel导入报价</button><button class="btn primary" onclick="openForm('quote')">＋ 新增报价</button></div></div>
+        <div class="card"><div class="table-wrap"><table><thead><tr><th>客户</th><th>型号/报价单</th><th>品牌</th><th>数量/项数</th><th>报价</th><th>状态</th><th>下次跟进</th><th>操作</th></tr></thead><tbody id="quoteTable"></tbody></table></div><div id="quotePager" class="pager"></div></div>
       </section>
 
       <section class="page" id="page-orders">
@@ -154,6 +178,13 @@
       <section class="page" id="page-tasks">
         <div class="page-head"><div><h2>任务中心</h2><p>日常开发、WhatsApp、Facebook、客户跟进等工作任务。</p></div><button class="btn primary" onclick="openForm('task')">＋ 新增任务</button></div>
         <div class="grid cols-2"><div class="card"><h3>未完成</h3><div id="taskOpen"></div></div><div class="card"><h3>已完成</h3><div id="taskDone"></div></div></div>
+      </section>
+
+
+      <section class="page" id="page-review">
+        <div class="page-head"><div><h2>周报 / 月报</h2><p>自动汇总新增客户、回复、RFQ、报价、样品、PI、成交、待付款和主要反馈原因。仅做内部统计，不会自动发送给任何人。</p></div><div><select id="reviewRange" class="btn"><option value="7">最近7天</option><option value="30" selected>最近30天</option><option value="90">最近90天</option></select></div></div>
+        <div id="reviewStats" class="report-grid"></div>
+        <div class="grid cols-2" style="margin-top:13px"><div class="card"><div class="card-head"><h3>客户反馈 / 丢单原因</h3></div><div id="reviewFeedback"></div></div><div class="card"><div class="card-head"><h3>国家分布</h3></div><div id="reviewCountries"></div></div></div>
       </section>
 
       <section class="page" id="page-holidays">
@@ -168,8 +199,8 @@
       </section>
 
       <section class="page" id="page-assistant">
-        <div class="page-head"><div><h2>AI助手</h2><p>当前内置数据助手会读取云端 CRM 数据；后续可接真实大模型后端。</p></div></div>
-        <div class="card"><div class="chat"><div class="chat-log" id="chatLog"><div class="msg ai">你好。我可以根据当前同步到云端的客户、报价、PI和沟通记录回答问题。</div></div><div class="chat-input"><textarea id="chatInput" placeholder="例如：今天先跟进谁？"></textarea><button class="btn primary" id="sendChatBtn">发送</button></div></div></div>
+        <div class="page-head"><div><h2>AI助手</h2><p>只做内部分析、下一步建议和话术草稿；不会自动发送 Email、WhatsApp，也不会自动读取你的邮箱。</p></div></div>
+        <div class="card"><div class="chat"><div class="chat-log" id="chatLog"><div class="msg ai">你好。我可以根据当前同步到云端的客户、RFQ、报价、样品、PI和沟通记录给出下一步建议。所有对外发送都由你手动确认和发送。</div></div><div class="chat-input"><textarea id="chatInput" placeholder="例如：今天先跟进谁？"></textarea><button class="btn primary" id="sendChatBtn">发送</button></div></div></div>
       </section>
 
       <section class="page" id="page-migration">
@@ -188,6 +219,7 @@
           <div class="form-grid">
             <div class="field"><label>报价默认几天后提醒</label><input type="number" id="setQuoteDays" min="1"></div>
             <div class="field"><label>沉睡客户多少天提醒</label><input type="number" id="setDormantDays" min="1"></div>
+            <div class="field"><label>RFQ 默认几天后提醒</label><input type="number" id="setRfqDays" min="1"></div>
             <div class="field"><label>同一联系人最多开发次数</label><input type="number" id="setContactNoReplyLimit" min="1" max="10" value="3"></div>
             <div class="field"><label>开发邮件默认几天后再跟进</label><input type="number" id="setContactFollowDays" min="1" max="30" value="3"></div>
             <div class="field"><label>周末普通跟进</label><select id="setWeekend"><option value="false">关闭</option><option value="true">开启</option></select></div>
@@ -196,12 +228,17 @@
           <button class="btn primary" id="saveSettingsBtn" style="margin-top:12px">保存设置</button>
         </div>
         <div class="card" style="margin-top:13px">
+          <div class="card-head"><div><h3>👤 跟进业务员 / 我方公司</h3><div class="backup-status">用于区分客户归属。每行一个销售身份，格式：业务员 | 我方公司 | 跟进邮箱。</div></div></div>
+          <div class="field full" style="margin-top:10px"><label>常用销售身份</label><textarea id="setSalesProfiles" rows="5" placeholder="例如：&#10;Miya | INLINKDA TECHNOLOGY CO.,LIMITED | miya@inlinkda.com&#10;Carter | HK Core-Taiye Technology Co., Limited | sales@yourdomain.com"></textarea></div>
+          <div class="notice" style="margin-top:8px">把你实际使用的业务员身份、公司抬头和发件邮箱都录在这里。新增/编辑客户时可直接选择；客户中心可按业务员和我方公司筛选。</div>
+        </div>
+        <div class="card" style="margin-top:13px">
           <div class="card-head"><div><h3>🛡️ 数据安全与本地备份</h3><div class="backup-status">把当前账号里的客户、沟通、报价、PI/订单、任务、节假日、附件链接和设置导出为一个 JSON 文件，建议保存到电脑和网盘各一份。</div></div></div>
           <div class="form-grid">
             <div class="field"><label>自动提醒间隔</label><select id="setBackupReminderDays"><option value="7">每 7 天提醒一次（推荐）</option><option value="14">每 14 天提醒一次</option><option value="30">每 30 天提醒一次</option></select></div>
             <div class="field"><label>上次成功备份</label><div id="lastBackupText" class="notice" style="min-height:39px;display:flex;align-items:center">尚未备份</div></div>
           </div>
-          <div class="backup-actions" style="margin-top:12px"><button class="btn primary" id="exportFullBackupBtn">⬇ 一键导出全量 JSON 备份</button></div>
+          <div class="backup-actions" style="margin-top:12px"><button class="btn primary" id="exportFullBackupBtn">⬇ 一键导出全量 JSON 备份</button><button class="btn" id="exportBusinessExcelBtn">📊 导出业务数据 Excel</button></div><div style="margin-top:13px"><div class="card-head"><h3 style="font-size:14px">最近导出记录</h3></div><div id="exportLogList" class="notice">暂无导出记录。</div></div>
           <div class="notice" style="margin-top:10px">备份文件只保存在你下载的位置，不会上传到 GitHub。建议每周备份一次，并额外复制到 Google Drive / OneDrive / WPS 云盘。备份文件可能包含客户联系方式和业务记录，请不要发送给无关人员。</div>
         </div>
       </section>
@@ -223,12 +260,14 @@
   <div class="modal" style="width:min(1100px,97vw)">
     <div class="modal-head"><div><h3 id="clientTitle">客户详情</h3><div id="clientSub" class="item-meta"></div></div><button class="close" onclick="closeModal('clientModal')">×</button></div>
     <div class="modal-body">
-      <div class="tabs"><button class="tab active" data-tab="overview">概览</button><button class="tab" data-tab="contacts">联系人开发</button><button class="tab" data-tab="timeline">时间轴</button><button class="tab" data-tab="communications">沟通历史</button><button class="tab" data-tab="quotes">报价历史</button><button class="tab" data-tab="files">附件</button><button class="tab" data-tab="followup">下一次跟进</button></div>
+      <div class="tabs"><button class="tab active" data-tab="overview">概览</button><button class="tab" data-tab="contacts">联系人开发</button><button class="tab" data-tab="timeline">时间轴</button><button class="tab" data-tab="communications">沟通历史</button><button class="tab" data-tab="rfqs">RFQ/询价</button><button class="tab" data-tab="quotes">报价记录</button><button class="tab" data-tab="samples">样品跟进</button><button class="tab" data-tab="files">附件</button><button class="tab" data-tab="followup">下一次跟进</button></div>
       <div class="pane active" data-pane="overview" id="clientOverview"></div>
       <div class="pane" data-pane="contacts" id="clientContacts"></div>
       <div class="pane" data-pane="timeline" id="clientTimeline"></div>
+      <div class="pane" data-pane="rfqs" id="clientRfqs"></div>
       <div class="pane" data-pane="communications"><div class="card-head"><h3>历史沟通</h3><button class="btn small primary" id="addCommBtn">＋ 添加沟通</button></div><div id="clientComms"></div></div>
       <div class="pane" data-pane="quotes" id="clientQuotes"></div>
+      <div class="pane" data-pane="samples" id="clientSamples"></div>
       <div class="pane" data-pane="files">
         <div class="card-head"><h3>客户附件链接（免费版）</h3><button class="help" data-help="files">❓</button></div>
         <div class="notice">免费版不使用 Firebase Storage。请把 PI、报价、Datasheet、图片等放到 Google Drive / OneDrive / WPS 云盘，然后把共享链接保存在这里。</div>
@@ -240,8 +279,9 @@
         <div id="clientFiles" style="margin-top:12px"></div>
       </div>
       <div class="pane" data-pane="followup">
-        <button class="btn primary" id="generateFollowupBtn">✨ 生成下一次跟进</button>
-        <div id="followupStrategy" class="notice" style="margin-top:10px">点击按钮后生成策略。</div>
+        <div id="smartNextAction" class="smart-next"><div class="title">正在分析下一步…</div><div class="reason">系统会结合最近沟通、客户反馈、报价、样品、PI、付款状态和联系人开发次数自动给建议。</div></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="saveSmartTaskBtn">✅ 把建议保存为任务</button><button class="btn" id="generateFollowupBtn">✨ 生成跟进话术</button></div>
+        <div id="followupStrategy" class="notice" style="margin-top:10px">系统会自动给出策略，也可以点击“生成跟进话术”。</div>
         <div class="grid cols-2" style="margin-top:10px">
           <div class="field"><label>Email版本</label><textarea id="followupEmail"></textarea></div>
           <div class="field"><label>WhatsApp版本</label><textarea id="followupWA"></textarea></div>
@@ -265,6 +305,37 @@
       <div id="excelPreview" class="excel-preview"></div>
     </div>
     <div class="modal-foot"><button class="btn" onclick="closeModal('excelImportModal')">取消</button><button class="btn primary" id="excelImportBtn" disabled>导入到云端</button></div>
+  </div>
+</div>
+
+
+<!-- Excel 报价批量导入 -->
+<div class="modal-bg" id="quoteImportModal">
+  <div class="modal" style="width:min(1040px,97vw)">
+    <div class="modal-head"><div><h3>Excel 批量导入报价</h3><div class="item-meta">适合客户一次几百个型号。系统把同一客户的一张报价表按“批量报价单”保存，避免几百行变成几百个云端文档。</div></div><button class="close" onclick="closeModal('quoteImportModal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field"><label>默认客户（表格没有客户列时使用）</label><select id="quoteImportDefaultClient"><option value="">请选择客户</option></select></div>
+        <div class="field"><label>默认报价日期</label><input type="date" id="quoteImportDate"></div>
+      </div>
+      <div class="excel-drop" id="quoteDropZone" style="margin-top:12px">
+        <b>把报价 Excel 直接拖到这里</b>
+        <span>支持 .xlsx / .xls / .csv；会自动寻找表头。可识别：客户、型号/MPN、品牌、数量、Target Price、报价/单价、币种、DC、交期/LT、状态、备注。</span>
+        <input id="quoteFileInput" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" hidden>
+      </div>
+      <div id="quoteImportStatus" class="notice" style="margin-top:12px">尚未选择文件。</div>
+      <div id="quoteImportSummary" class="quote-import-summary"></div>
+      <div id="quoteImportPreview" class="excel-preview"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal('quoteImportModal')">取消</button><button class="btn primary" id="quoteImportBtn" disabled>导入报价到云端</button></div>
+  </div>
+</div>
+
+<!-- 批量报价明细 -->
+<div class="modal-bg" id="quoteBatchModal">
+  <div class="modal" style="width:min(1120px,98vw)">
+    <div class="modal-head"><div><h3 id="quoteBatchTitle">批量报价明细</h3><div id="quoteBatchSub" class="item-meta"></div></div><button class="close" onclick="closeModal('quoteBatchModal')">×</button></div>
+    <div class="modal-body"><div id="quoteBatchBody"></div></div>
   </div>
 </div>
 
