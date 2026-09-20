@@ -35,7 +35,7 @@ const state = {
   holidays: [],
   holidayCountries: [],
   files: [],
-  settings: { quoteFollowDays:5, dormantDays:30, weekendFollow:false, currency:"USD" }
+  settings: { quoteFollowDays:5, dormantDays:30, weekendFollow:false, currency:"USD", backupReminderDays:7, lastBackupAt:"" }
 };
 
 const unsubscribers = [];
@@ -323,7 +323,7 @@ function bindRealtimeData(){
   });
   const settingsUnsub=onSnapshot(doc(db,"users",currentUser.uid,"settings","main"),snap=>{
     if(snap.exists()) state.settings={...state.settings,...snap.data()};
-    renderSettings();renderAll();
+    renderSettings();renderAll();checkBackupReminder();
   });
   unsubscribers.push(settingsUnsub);
 }
@@ -1018,15 +1018,107 @@ function renderSettings(){
   $("setDormantDays").value=state.settings.dormantDays??30;
   $("setWeekend").value=String(state.settings.weekendFollow??false);
   $("setCurrency").value=state.settings.currency||"USD";
+  if($("setBackupReminderDays")) $("setBackupReminderDays").value=String(state.settings.backupReminderDays??7);
+  renderBackupStatus();
 }
 $("saveSettingsBtn").addEventListener("click",async()=>{
   const data={
     quoteFollowDays:Number($("setQuoteDays").value||5),dormantDays:Number($("setDormantDays").value||30),
-    weekendFollow:$("setWeekend").value==="true",currency:$("setCurrency").value
+    weekendFollow:$("setWeekend").value==="true",currency:$("setCurrency").value,
+    backupReminderDays:Number($("setBackupReminderDays")?.value||7)
   };
   await setDoc(doc(db,"users",currentUser.uid,"settings","main"),data,{merge:true});
   alert("设置已同步。");
 });
+
+// ============================================================
+// 12.1 全量本地备份 + 周期提醒
+// ============================================================
+function backupPlain(value){
+  if(value===null||value===undefined) return value;
+  if(Array.isArray(value)) return value.map(backupPlain);
+  if(typeof value==="object"){
+    if(typeof value.toDate==="function"){
+      try{return value.toDate().toISOString()}catch(_){return String(value)}
+    }
+    const out={};
+    Object.entries(value).forEach(([k,v])=>out[k]=backupPlain(v));
+    return out;
+  }
+  return value;
+}
+function backupFileName(){
+  const d=new Date();
+  const pad=n=>String(n).padStart(2,"0");
+  return `AI外贸工作台_全量备份_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+}
+function buildBackupPayload(){
+  return backupPlain({
+    backupFormat:"AI-Trade-Workspace-Full-Backup",
+    version:"V3.1.4",
+    exportedAt:new Date().toISOString(),
+    account:{email:currentUser?.email||"",uid:currentUser?.uid||""},
+    clients:state.clients,
+    communications:state.communications,
+    quotes:state.quotes,
+    orders:state.orders,
+    tasks:state.tasks,
+    holidays:state.holidays,
+    holidayCountries:state.holidayCountries,
+    files:state.files,
+    settings:state.settings
+  });
+}
+async function exportFullBackup(){
+  if(!currentUser) return alert("请先登录后再备份。");
+  try{
+    const payload=buildBackupPayload();
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;a.download=backupFileName();a.style.display="none";document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    const now=new Date().toISOString();
+    await setDoc(doc(db,"users",currentUser.uid,"settings","main"),{lastBackupAt:now},{merge:true});
+    state.settings.lastBackupAt=now;
+    sessionStorage.setItem("backupBannerDismissed","");
+    renderBackupStatus();
+    alert("全量备份已生成。请把下载的 JSON 文件保存在电脑，并建议再复制一份到网盘。");
+  }catch(err){
+    console.error("backup failed",err);
+    alert("备份失败："+(err?.message||err));
+  }
+}
+function backupAgeDays(){
+  const last=state.settings.lastBackupAt;
+  if(!last) return Infinity;
+  const t=new Date(last).getTime();
+  if(!Number.isFinite(t)) return Infinity;
+  return Math.floor((Date.now()-t)/86400000);
+}
+function renderBackupStatus(){
+  const last=state.settings.lastBackupAt;
+  if($("lastBackupText")){
+    if(!last) $("lastBackupText").textContent="尚未做过本地全量备份";
+    else{
+      const d=new Date(last);
+      $("lastBackupText").textContent=Number.isNaN(d.getTime())?"已备份":`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+    }
+  }
+  const banner=$("backupReminderBanner"), text=$("backupReminderText");
+  if(!banner||!text) return;
+  const days=Number(state.settings.backupReminderDays||7);
+  const age=backupAgeDays();
+  const dismissed=sessionStorage.getItem("backupBannerDismissed")==="1";
+  const due=age>=days;
+  banner.style.display=due&&!dismissed?"flex":"none";
+  if(age===Infinity) text.textContent=`当前账号还没有本地全量备份。建议现在备份，以后每 ${days} 天提醒一次。`;
+  else text.textContent=`距离上次本地备份已经 ${age} 天，已达到 ${days} 天提醒周期。`;
+}
+function checkBackupReminder(){renderBackupStatus()}
+$("exportFullBackupBtn")?.addEventListener("click",exportFullBackup);
+$("backupNowBannerBtn")?.addEventListener("click",exportFullBackup);
+$("dismissBackupBannerBtn")?.addEventListener("click",()=>{sessionStorage.setItem("backupBannerDismissed","1");renderBackupStatus()});
 
 // ============================================================
 // 13. 本地数据助手
