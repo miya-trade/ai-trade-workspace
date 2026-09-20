@@ -15,7 +15,7 @@ import {
 // ============================================================
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-try { await setPersistence(auth, browserLocalPersistence); } catch(e) { console.warn("auth persistence", e); }
+setPersistence(auth, browserLocalPersistence).catch(e=>console.warn("auth persistence", e));
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
@@ -286,6 +286,7 @@ async function doLogin(){
   }
 }
 $("googleLoginBtn").addEventListener("click", doLogin);
+document.documentElement.dataset.appReady="1";
 $("logoutBtn").addEventListener("click", ()=>signOut(auth));
 
 onAuthStateChanged(auth, async user=>{
@@ -1493,7 +1494,7 @@ function backupFileName(){
 function buildBackupPayload(){
   return backupPlain({
     backupFormat:"AI-Trade-Workspace-Full-Backup",
-    version:"V3.2.1",
+    version:"V3.2.2",
     exportedAt:new Date().toISOString(),
     account:{email:currentUser?.email||"",uid:currentUser?.uid||""},
     clients:state.clients,
