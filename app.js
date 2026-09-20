@@ -35,7 +35,7 @@ const state = {
   holidays: [],
   holidayCountries: [],
   files: [],
-  settings: { quoteFollowDays:5, dormantDays:30, weekendFollow:false, currency:"USD", backupReminderDays:7, lastBackupAt:"" }
+  settings: { quoteFollowDays:5, dormantDays:30, weekendFollow:false, currency:"USD", backupReminderDays:7, lastBackupAt:"", contactNoReplyLimit:3, contactFollowDays:3 }
 };
 
 const unsubscribers = [];
@@ -364,12 +364,7 @@ function getFollowups(){
     }
   });
 
-  state.clients.forEach(c=>{
-    if(c.nextFollowUp && c.nextFollowUp<=todayISO()){
-      const long=["长期维护","沉睡客户"].includes(c.status);
-      out.push({type:"client",id:c.id,priority:long?"long":c.grade==="A"?"high":"normal",title:c.company,meta:`${c.country||""} · ${c.status||""}`});
-    }
-  });
+  state.clients.forEach(c=>{const rot=currentContactInfo(c);if(rot.pending){const meta=rot.next?`${rot.reason} · 建议切换至 ${contactLabel(rot.next)}`:`${rot.reason} · 已无更多联系人，建议转沉睡客户`;out.push({type:"client",id:c.id,priority:"high",title:c.company,meta});}else if(c.nextFollowUp&&c.nextFollowUp<=todayISO()){const long=["长期维护","沉睡客户"].includes(c.status);const current=rot.current?` · 当前 ${contactLabel(rot.current)} · ${rot.current.touchCount||0}/${rot.limit}次`:"";out.push({type:"client",id:c.id,priority:long?"long":c.grade==="A"?"high":"normal",title:c.company,meta:`${c.country||""} · ${c.status||""}${current}`});}});
 
   const rank={high:3,normal:2,long:1}, map=new Map();
   out.forEach(x=>{
@@ -413,15 +408,10 @@ function renderClients(){
   sf.innerHTML='<option value="">全部状态</option>'+clientStatuses.map(x=>`<option>${x}</option>`).join(""); sf.value=cur;
   const q=($("clientFilter").value||"").toLowerCase(), status=sf.value;
   const rows=state.clients.filter(c=>{
-    const hay=[c.company,c.country,c.contact,c.email,c.whatsapp].join(" ").toLowerCase();
+    const hay=[c.company,c.country,c.contact,getClientEmails(c,{includeNotes:true}).join(" "),c.whatsapp].join(" ").toLowerCase();
     return (!q||hay.includes(q))&&(!status||c.status===status);
   });
-  $("clientTable").innerHTML=rows.length?rows.map(c=>`<tr>
-    <td data-label="客户"><b>${esc(c.company||"未命名")}</b></td><td data-label="国家">${esc(c.country||"—")}</td><td data-label="联系人">${esc(c.contact||"—")}</td>
-    <td data-label="状态">${badge(c.status||"—",["已成交","老客户"].includes(c.status)?"green":["PI","已报价","重点跟进"].includes(c.status)?"orange":"")}</td>
-    <td data-label="等级">${esc(c.grade||"—")}</td><td data-label="下次跟进">${fmtDate(c.nextFollowUp)}</td>
-    <td data-label="操作"><button class="btn small primary" onclick="openClient('${c.id}')">详情</button> <button class="btn small" onclick="openForm('client','${c.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('client','${c.id}')">删除</button></td>
-  </tr>`).join(""):`<tr><td class="client-empty-cell" colspan="7">${empty("还没有客户。")}</td></tr>`;
+  $("clientTable").innerHTML=rows.length?rows.map(c=>{const rot=currentContactInfo(c),ct=rot.current,ctHtml=ct?`<b>${esc(ct.name||ct.email)}</b><div class="item-meta">${ct.name?esc(ct.email):""} · ${ct.touchCount||0}/${rot.limit}次${rot.pending?" · 待切换":""}</div>`:"—";return `<tr><td data-label="客户"><b>${esc(c.company||"未命名")}</b></td><td data-label="国家">${esc(c.country||"—")}</td><td data-label="联系人">${ctHtml}</td><td data-label="状态">${badge(c.status||"—",["已成交","老客户","已回复"].includes(c.status)?"green":["PI","已报价","重点跟进"].includes(c.status)?"orange":"")}${rot.pending?` ${badge("建议换联系人","red")}`:""}</td><td data-label="等级">${esc(c.grade||"—")}</td><td data-label="下次跟进">${fmtDate(c.nextFollowUp)}</td><td data-label="操作"><button class="btn small primary" onclick="openClient('${c.id}')">详情</button> <button class="btn small" onclick="openForm('client','${c.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('client','${c.id}')">删除</button></td></tr>`}).join(""):`<tr><td class="client-empty-cell" colspan="7">${empty("还没有客户。")}</td></tr>`;
 }
 $("clientFilter").addEventListener("input",renderClients);
 $("clientStatusFilter").addEventListener("change",renderClients);
@@ -477,13 +467,13 @@ const schemas={
   client:[
     ["company","公司名称","text",true],["country","国家","text"],["city","城市","text"],["website","官网","text"],
     ["grade","客户等级","select",false,["A","B","C","D"]],["status","客户状态","select",false,clientStatuses],
-    ["contact","联系人","text"],["title","职位","text"],["email","Email","email"],["phone","电话","text"],["whatsapp","WhatsApp","text"],
+    ["contact","联系人","text"],["title","职位","text"],["email","Email（可填多个，用逗号/分号/换行分隔）","textarea"],["phone","电话","text"],["whatsapp","WhatsApp","text"],
     ["linkedin","LinkedIn","text"],["facebook","Facebook","text"],["telegram","Telegram","text"],
     ["lastContact","最后联系","date"],["nextFollowUp","下次跟进","date"],["notes","备注","textarea"]
   ],
   communication:[
-    ["clientId","客户","client",true],["date","沟通日期","date",true],["channel","渠道","select",true,["Email","WhatsApp","Telegram","LinkedIn","Facebook","电话","其他"]],
-    ["direction","方向","select",false,["我联系客户","客户回复","双向沟通"]],["subject","主题/简述","text"],["content","沟通内容","textarea",true],
+    ["clientId","客户","client",true],["contactEmail","本次联系邮箱","clientEmail",false],["date","沟通日期","date",true],["channel","渠道","select",true,["Email","WhatsApp","Telegram","LinkedIn","Facebook","电话","其他"]],
+    ["direction","方向","select",false,["我联系客户","客户回复","双向沟通","邮件退信"]],["subject","主题/简述","text"],["content","沟通内容","textarea",true],
     ["customerFeedback","客户反馈","textarea"],["nextAction","下一步","text"],["nextFollowUp","下次跟进","date"]
   ],
   quote:[
@@ -506,59 +496,49 @@ window.openForm = (type,id=null,preset={})=>{
   const key=pathFor(type), existing=id?state[key].find(x=>x.id===id)||{}:{...preset};
   if(!id){
     if(type==="client"){existing.grade="C";existing.status="新客户"}
-    if(type==="communication"){existing.date=todayISO();existing.channel="Email";existing.direction="我联系客户"}
+    if(type==="communication"){existing.date=todayISO();existing.channel="Email";existing.direction="我联系客户";if(existing.clientId&&!existing.contactEmail){const cc=state.clients.find(x=>x.id===existing.clientId);existing.contactEmail=currentContactInfo(cc||{}).current?.email||""}}
     if(type==="quote"){existing.status="待报价";existing.quoteDate=todayISO();existing.nextFollowUp=addDays(todayISO(),state.settings.quoteFollowDays)}
     if(type==="order"){existing.paymentStatus="未付款";existing.orderStatus="PI待付款";existing.piDate=todayISO();existing.currency=state.settings.currency}
     if(type==="task"){existing.priority="普通";existing.dueDate=todayISO()}
     if(type==="holiday"){existing.remindDays=7}
   }
+  if(type==="client") existing.email=getClientEmails(existing,{includeNotes:true}).join("; ");
   const names={client:"客户",communication:"沟通记录",quote:"报价",order:"PI / 订单",task:"任务",holiday:"节假日"};
   $("formTitle").textContent=(id?"编辑 ":"新增 ")+names[type];
-  $("formFields").innerHTML=schemas[type].map(f=>fieldHtml(f,existing[f[0]])).join("");
+  $("formFields").innerHTML=schemas[type].map(f=>fieldHtml(f,existing[f[0]],existing)).join("");
   $("formModal").classList.add("show");
+  if(type==="communication"){const clientSel=$("entityForm").querySelector('[name="clientId"]'),emailSel=$("entityForm").querySelector('[name="contactEmail"]');const refreshEmails=()=>{if(!emailSel)return;const cc=state.clients.find(x=>x.id===clientSel?.value),list=cc?getClientContacts(cc,{includeNotes:true}):[],cur=emailSel.value;emailSel.innerHTML='<option value="">请选择邮箱</option>'+list.map(x=>`<option value="${esc(x.email)}" ${cur.toLowerCase()===x.email.toLowerCase()?"selected":""}>${esc(contactLabel(x))}</option>`).join("");if(!emailSel.value&&cc)emailSel.value=currentContactInfo(cc).current?.email||"";};clientSel?.addEventListener("change",refreshEmails);refreshEmails();}
 };
-function fieldHtml([key,label,type,required,opts],val){
+function fieldHtml([key,label,type,required,opts],val,context={}){
   const req=required?"required":"";
   let c="";
   if(type==="textarea") c=`<textarea name="${key}" ${req}>${esc(val||"")}</textarea>`;
   else if(type==="select") c=`<select name="${key}" ${req}>${(opts||[]).map(o=>`<option ${String(val)===String(o)?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
   else if(type==="client") c=`<select name="${key}" ${req}><option value="">请选择客户</option>${state.clients.map(x=>`<option value="${x.id}" ${val===x.id?"selected":""}>${esc(x.company)} · ${esc(x.country||"")}</option>`).join("")}</select>`;
+  else if(type==="clientEmail"){const cc=state.clients.find(x=>x.id===context.clientId),emails=cc?getClientContacts(cc,{includeNotes:true}):[];c=`<select name="${key}" ${req}><option value="">请选择邮箱</option>${emails.map(x=>`<option value="${esc(x.email)}" ${String(val).toLowerCase()===x.email.toLowerCase()?"selected":""}>${esc(contactLabel(x))}</option>`).join("")}</select>`;}
   else c=`<input name="${key}" type="${type}" value="${esc(val??"")}" ${req}>`;
   return `<div class="field ${type==="textarea"?"full":""}"><label>${esc(label)}${required?" *":""}</label>${c}</div>`;
 }
 $("saveEntityBtn").addEventListener("click",saveEntity);
 async function saveEntity(){
-  const form=$("entityForm"); if(!form.reportValidity()) return;
-  const fd=new FormData(form), obj={}; for(const [k,v] of fd.entries()) obj[k]=v;
-  if(editing.type==="order") obj.amount=Number(obj.amount||0);
-  if(editing.type==="holiday") obj.remindDays=Number(obj.remindDays||7);
-  if(editing.type==="client") canonicalizeClientCountry(obj);
-  sync("busy","正在保存…");
-  const key=pathFor(editing.type);
-
-  if(editing.id){
-    await updateDoc(doc(db,"users",currentUser.uid,key,editing.id),{...obj,updatedAt:serverTimestamp()});
-  }else{
-    const r=await addDoc(refCollection(key),{...obj,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-    editing.id=r.id;
-  }
-
-  if(editing.type==="client" && obj.country){
-    autoTrackCountriesFromNames([obj.country]).catch(console.warn);
-  }
-
-  // 沟通记录联动客户最后联系 / 下次跟进
-  if(editing.type==="communication" && obj.clientId){
-    const updates={lastContact:obj.date||todayISO(),updatedAt:serverTimestamp()};
-    if(obj.nextFollowUp) updates.nextFollowUp=obj.nextFollowUp;
-    if(["客户回复","双向沟通"].includes(obj.direction)){
-      const c=state.clients.find(x=>x.id===obj.clientId);
-      if(c && ["新客户","已开发"].includes(c.status)) updates.status="已回复";
-    }
-    await updateDoc(doc(db,"users",currentUser.uid,"clients",obj.clientId),updates);
-  }
-  closeModal("formModal"); sync("ok","已自动同步");
+  const form=$("entityForm");if(!form.reportValidity())return;const wasEditing=Boolean(editing.id),original=(editing.type&&editing.id)?state[pathFor(editing.type)]?.find(x=>x.id===editing.id)||{}:{};const fd=new FormData(form),obj={};for(const[k,v]of fd.entries())obj[k]=v;
+  if(editing.type==="order")obj.amount=Number(obj.amount||0);if(editing.type==="holiday")obj.remindDays=Number(obj.remindDays||7);if(editing.type==="client"){buildContactsFromEditedClient(obj,original);canonicalizeClientCountry(obj);}sync("busy","正在保存…");const key=pathFor(editing.type);
+  if(editing.id)await updateDoc(doc(db,"users",currentUser.uid,key,editing.id),{...obj,updatedAt:serverTimestamp()});else{const r=await addDoc(refCollection(key),{...obj,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});editing.id=r.id;}
+  if(editing.type==="client"&&obj.country)autoTrackCountriesFromNames([obj.country]).catch(console.warn);if(editing.type==="communication"&&obj.clientId)await updateClientOutreachFromCommunication(obj,{isNew:!wasEditing});closeModal("formModal");sync("ok","已自动同步");
 }
+async function updateClientOutreachFromCommunication(obj,{isNew=true}={}){
+  const c=state.clients.find(x=>x.id===obj.clientId);if(!c)return;const info=currentContactInfo(c);let contacts=info.contacts.map(x=>({...x}));const wanted=(extractEmails(obj.contactEmail||"")[0]||info.current?.email||"").toLowerCase();let idx=contacts.findIndex(x=>x.email.toLowerCase()===wanted);if(idx<0&&wanted){contacts.push(normalizeContactRecord({email:wanted}));idx=contacts.length-1;}if(idx<0&&contacts.length)idx=0;const updates={lastContact:obj.date||todayISO(),updatedAt:serverTimestamp()};if(obj.nextFollowUp)updates.nextFollowUp=obj.nextFollowUp;const limit=Math.max(1,Number(state.settings.contactNoReplyLimit||3)),gap=Math.max(1,Number(state.settings.contactFollowDays||3));
+  if(idx>=0){let ct={...contacts[idx]};if(isNew&&obj.direction==="我联系客户"){ct.touchCount=(ct.touchCount||0)+1;ct.noReplyCount=(ct.noReplyCount||0)+1;ct.lastContact=obj.date||todayISO();ct.nextFollowUp=obj.nextFollowUp||addDays(ct.lastContact,gap);ct.status=ct.noReplyCount>=limit?`${limit}次未回复`:"开发中";contacts[idx]=ct;updates.contacts=contacts;updates.currentContactEmail=ct.email;updates.contactRotationStatus=ct.noReplyCount>=limit?"waiting_switch":"active";updates.nextFollowUp=ct.noReplyCount>=limit?(obj.date||todayISO()):ct.nextFollowUp;if(["新客户",""].includes(c.status||""))updates.status="已开发";}
+    else if(isNew&&["客户回复","双向沟通"].includes(obj.direction)){contacts=contacts.map((x,i)=>({...x,isPrimary:i===idx}));ct={...contacts[idx],replied:true,invalid:false,isPrimary:true,status:"已回复",lastContact:obj.date||todayISO(),noReplyCount:0};contacts[idx]=ct;updates.contacts=contacts;updates.currentContactEmail=ct.email;updates.contactRotationStatus="replied";updates.status="已回复";if(!obj.nextFollowUp)delete updates.nextFollowUp;if(ct.name)updates.contact=ct.name;if(ct.title)updates.title=ct.title;if(ct.phone)updates.phone=ct.phone;if(ct.whatsapp)updates.whatsapp=ct.whatsapp;}
+    else if(isNew&&obj.direction==="邮件退信"){ct={...ct,invalid:true,replied:false,status:"无效",lastContact:obj.date||todayISO()};contacts[idx]=ct;updates.contacts=contacts;updates.currentContactEmail=ct.email;updates.contactRotationStatus="waiting_switch";updates.nextFollowUp=obj.date||todayISO();}}
+  await updateDoc(doc(db,"users",currentUser.uid,"clients",obj.clientId),updates);
+}
+window.recordOutreachTouch=async clientId=>{const c=state.clients.find(x=>x.id===clientId);if(!c)return;const info=currentContactInfo(c);if(!info.current){alert("这个客户还没有可开发邮箱，请先编辑客户并添加邮箱。");return}const n=(info.current.touchCount||0)+1,next=addDays(todayISO(),Math.max(1,Number(state.settings.contactFollowDays||3)));if(!confirm(`记录一次开发邮件？\n\n当前联系人：${contactLabel(info.current)}\n本次将记为第 ${n} 次联系。`))return;sync("busy","正在记录开发…");const obj={clientId,date:todayISO(),channel:"Email",direction:"我联系客户",contactEmail:info.current.email,subject:`开发邮件 · 第${n}次`,content:`已向 ${info.current.email} 发送第 ${n} 次开发/跟进邮件，暂未收到回复。`,nextAction:"等待回复",nextFollowUp:next};await addDoc(refCollection("communications"),{...obj,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});await updateClientOutreachFromCommunication(obj,{isNew:true});sync("ok","已自动同步");};
+window.switchToNextContact=async clientId=>{const c=state.clients.find(x=>x.id===clientId);if(!c)return;const info=currentContactInfo(c);if(!info.current){alert("没有可切换的联系人。");return}if(!info.next){if(!confirm(`这家公司没有更多可用联系人了。\n\n是否标记为“沉睡客户”，并在 ${state.settings.dormantDays||30} 天后重新提醒？`))return;await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),{contactRotationStatus:"completed",status:"沉睡客户",nextFollowUp:addDays(todayISO(),Number(state.settings.dormantDays||30)),updatedAt:serverTimestamp()});return}if(!confirm(`切换开发联系人？\n\n当前：${contactLabel(info.current)}\n下一位：${contactLabel(info.next)}`))return;const contacts=info.contacts.map(x=>({...x})),oldIdx=info.index,nextIdx=contacts.findIndex(x=>x.email.toLowerCase()===info.next.email.toLowerCase());if(oldIdx>=0&&!contacts[oldIdx].replied&&!contacts[oldIdx].invalid&&contacts[oldIdx].status!==`${info.limit}次未回复`)contacts[oldIdx].status="已切换";if(nextIdx>=0&&contacts[nextIdx].status==="未开始")contacts[nextIdx].status="开发中";const patch={contacts,currentContactEmail:info.next.email,contactRotationStatus:"active",nextFollowUp:todayISO(),updatedAt:serverTimestamp()};if(info.next.name)patch.contact=info.next.name;if(info.next.title)patch.title=info.next.title;if(info.next.phone)patch.phone=info.next.phone;if(info.next.whatsapp)patch.whatsapp=info.next.whatsapp;await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),patch);};
+window.setCurrentContact=async(clientId,encodedEmail)=>{const email=decodeURIComponent(encodedEmail||""),c=state.clients.find(x=>x.id===clientId);if(!c)return;const contacts=getClientContacts(c,{includeNotes:true}),ct=contacts.find(x=>x.email.toLowerCase()===email.toLowerCase());if(!ct)return;const patch={contacts,currentContactEmail:ct.email,contactRotationStatus:ct.replied?"replied":"active",nextFollowUp:c.nextFollowUp||todayISO(),updatedAt:serverTimestamp()};if(ct.name)patch.contact=ct.name;if(ct.title)patch.title=ct.title;if(ct.phone)patch.phone=ct.phone;if(ct.whatsapp)patch.whatsapp=ct.whatsapp;await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),patch);};
+window.markContactInvalid=async(clientId,encodedEmail)=>{const email=decodeURIComponent(encodedEmail||""),c=state.clients.find(x=>x.id===clientId);if(!c)return;if(!confirm(`把 ${email} 标记为无效/退信，并提示切换下一联系人吗？`))return;const contacts=getClientContacts(c,{includeNotes:true}).map(x=>x.email.toLowerCase()===email.toLowerCase()?{...x,invalid:true,replied:false,status:"无效",lastContact:todayISO()}:x);await updateDoc(doc(db,"users",currentUser.uid,"clients",clientId),{contacts,currentContactEmail:email,contactRotationStatus:"waiting_switch",nextFollowUp:todayISO(),updatedAt:serverTimestamp()});};
+window.openContactCommunication=(clientId,encodedEmail,direction="我联系客户")=>{const email=decodeURIComponent(encodedEmail||"");openForm("communication",null,{clientId,contactEmail:email,direction});};
+
 window.removeEntity = async(type,id)=>{
   if(!confirm("确定删除这条记录吗？")) return;
   await deleteDoc(doc(db,"users",currentUser.uid,pathFor(type),id));
@@ -591,14 +571,12 @@ function renderClientDetail(){
   const files=state.files.filter(x=>x.clientId===c.id).sort((a,b)=>(b.createdDate||"").localeCompare(a.createdDate||""));
 
   $("clientTitle").textContent=c.company||"客户详情";
-  $("clientSub").textContent=[c.country,c.city,c.contact,c.email].filter(Boolean).join(" · ");
-  $("clientOverview").innerHTML=`<div class="grid cols-2"><div class="card">
-    <div class="item-meta">基本资料</div><h3>${esc(c.company||"")}</h3>
-    <div class="item-meta">国家：${esc(c.country||"—")} · 等级：${esc(c.grade||"—")} · 状态：${esc(c.status||"—")}</div>
-    <div class="item-meta">联系人：${esc(c.contact||"—")} · Email：${esc(c.email||"—")} · WhatsApp：${esc(c.whatsapp||"—")}</div>
-  </div><div class="card"><div class="item-meta">当前状态</div><h3>下次跟进：${fmtDate(c.nextFollowUp)}</h3><div class="item-meta">最后联系：${fmtDate(c.lastContact)}</div>
-    <div style="margin-top:8px"><button class="btn small primary" onclick="openForm('communication',null,{clientId:'${c.id}'})">记录沟通</button> <button class="btn small" onclick="openForm('quote',null,{clientId:'${c.id}'})">新增报价</button></div>
-  </div></div>`;
+  const clientEmails=getClientEmails(c,{includeNotes:true}),rot=currentContactInfo(c),current=rot.current;
+  $("clientSub").textContent=[c.country,c.city,current?.name||c.contact,current?.email||clientEmails[0]].filter(Boolean).join(" · ");
+  const rotationText=rot.pending?(rot.next?`建议切换到：${contactLabel(rot.next)}`:"所有联系人已开发完，建议转沉睡客户"):(current?`当前：${contactLabel(current)} · 已联系 ${current.touchCount||0}/${rot.limit} 次`:"尚未设置开发联系人");
+  $("clientOverview").innerHTML=`<div class="grid cols-2"><div class="card"><div class="item-meta">基本资料</div><h3>${esc(c.company||"")}</h3><div class="item-meta">国家：${esc(c.country||"—")} · 等级：${esc(c.grade||"—")} · 状态：${esc(c.status||"—")}</div><div class="item-meta">邮箱：${clientEmails.length?clientEmails.map(e=>esc(e)).join("；"):"—"} · WhatsApp：${esc(c.whatsapp||"—")}</div></div><div class="card"><div class="item-meta">联系人开发状态</div><h3>${esc(rotationText)}</h3><div class="item-meta">最后联系：${fmtDate(c.lastContact)} · 下次跟进：${fmtDate(c.nextFollowUp)}</div><div style="margin-top:8px;display:flex;gap:7px;flex-wrap:wrap"><button class="btn small primary" onclick="openForm('communication',null,{clientId:'${c.id}'})">记录沟通</button>${current&&!current.replied&&!current.invalid?` <button class="btn small" onclick="recordOutreachTouch('${c.id}')">＋记录一次开发</button>`:""}${rot.pending?` <button class="btn small danger" onclick="switchToNextContact('${c.id}')">➡ 切换下一联系人</button>`:""} <button class="btn small" onclick="openForm('quote',null,{clientId:'${c.id}'})">新增报价</button></div></div></div>`;
+  const contactRows=rot.contacts.map((ct,i)=>{const currentFlag=i===rot.index,cls=currentFlag?"current":ct.replied?"replied":ct.invalid?"invalid":"",st=ct.replied?"已回复":ct.invalid?"无效":ct.status||"未开始",encoded=encodeURIComponent(ct.email);return `<div class="contact-row ${cls}"><div class="contact-row-head"><div><div class="contact-email">${esc(ct.email)} ${currentFlag?badge("当前","green"):""} ${ct.isPrimary?badge("主要联系人","green"):""}</div><div class="contact-meta">${esc([ct.name,ct.title].filter(Boolean).join(" · ")||"未填写姓名/职位")}<br>已联系 ${ct.touchCount||0} 次 · 连续未回复 ${ct.noReplyCount||0} 次 · 最后联系 ${fmtDate(ct.lastContact)}</div></div><div>${badge(st,ct.replied?"green":ct.invalid||ct.noReplyCount>=rot.limit?"red":"orange")}</div></div><div class="contact-actions">${!currentFlag&&!ct.invalid&&!ct.replied?`<button class="btn small" onclick="setCurrentContact('${c.id}','${encoded}')">设为当前</button>`:""}<button class="btn small" onclick="openContactCommunication('${c.id}','${encoded}','我联系客户')">记录沟通</button>${!ct.replied?`<button class="btn small" onclick="openContactCommunication('${c.id}','${encoded}','客户回复')">记录回复</button>`:""}${!ct.invalid&&!ct.replied?`<button class="btn small danger" onclick="markContactInvalid('${c.id}','${encoded}')">退信/无效</button>`:""}</div></div>`;}).join("");
+  $("clientContacts").innerHTML=`<div class="contact-workflow"><div class="contact-summary"><div class="contact-kpi"><div class="k">当前开发联系人</div><div class="v">${rot.current?`${rot.index+1}/${rot.contacts.length}`:"0/0"}</div></div><div class="contact-kpi"><div class="k">当前邮箱</div><div class="v">${esc(rot.current?.email||"—")}</div></div><div class="contact-kpi"><div class="k">当前联系次数</div><div class="v">${rot.current?`${rot.current.touchCount||0}/${rot.limit}`:"—"}</div></div><div class="contact-kpi"><div class="k">下一联系人</div><div class="v">${esc(rot.next?contactLabel(rot.next):"—")}</div></div></div>${rot.pending?`<div class="rotation-alert high">⚠️ ${esc(rot.reason)}。${rot.next?`建议切换到下一联系人：${esc(contactLabel(rot.next))}`:`该公司全部可用联系人已开发完，建议进入沉睡客户，稍后再次开发。`}<div style="margin-top:8px"><button class="btn small primary" onclick="switchToNextContact('${c.id}')">${rot.next?"切换下一联系人":"转为沉睡客户"}</button></div></div>`:`<div class="rotation-alert">开发规则：同一联系人连续联系 ${rot.limit} 次仍无回复时，首页和跟进中心会提醒你切换下一联系人；任何联系人回复后，停止轮换并把回复人设为主要联系人。</div>`}<div>${contactRows||empty("暂无邮箱。请编辑客户添加多个邮箱，或从 Excel 导入联系人。")}</div></div>`;
 
   const events=[];
   comms.forEach(x=>events.push({date:x.date,kind:x.channel||"沟通",title:x.subject||x.direction||"沟通",desc:x.content||""}));
@@ -607,8 +585,8 @@ function renderClientDetail(){
   events.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   $("clientTimeline").innerHTML=events.length?`<div class="timeline">${events.map(e=>`<div class="tl"><div class="date">${fmtDate(e.date)} · ${esc(e.kind)}</div><div class="title">${esc(e.title)}</div><div class="desc">${esc(e.desc)}</div></div>`).join("")}</div>`:empty("暂无历史。");
 
-  $("clientComms").innerHTML=comms.length?comms.map(x=>`<div class="item"><div class="item-title">${esc(x.channel||"沟通")} · ${esc(x.direction||"")}</div><div class="item-meta">${fmtDate(x.date)} · ${esc(x.subject||"")}</div><div class="item-meta">${esc(x.content||"")}</div><div style="margin-top:6px"><button class="btn small" onclick="openForm('communication','${x.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('communication','${x.id}')">删除</button></div></div>`).join(""):empty("暂无沟通历史。");
-  $("addCommBtn").onclick=()=>openForm("communication",null,{clientId:c.id});
+  $("clientComms").innerHTML=comms.length?comms.map(x=>`<div class="item"><div class="item-title">${esc(x.channel||"沟通")} · ${esc(x.direction||"")}</div><div class="item-meta">${fmtDate(x.date)} · ${esc(x.contactEmail||"")} · ${esc(x.subject||"")}</div><div class="item-meta">${esc(x.content||"")}</div><div style="margin-top:6px"><button class="btn small" onclick="openForm('communication','${x.id}')">编辑</button> <button class="btn small danger" onclick="removeEntity('communication','${x.id}')">删除</button></div></div>`).join(""):empty("暂无沟通历史。");
+  $("addCommBtn").onclick=()=>openForm("communication",null,{clientId:c.id,contactEmail:currentContactInfo(c).current?.email||""});
 
   $("clientQuotes").innerHTML=quotes.length?`<div class="table-wrap"><table><thead><tr><th>日期</th><th>型号</th><th>数量</th><th>报价</th><th>状态</th></tr></thead><tbody>${quotes.map(q=>`<tr><td>${fmtDate(q.quoteDate)}</td><td>${esc(q.partNo||"")}</td><td>${esc(q.qty||"")}</td><td>${esc(q.quotePrice||"")}</td><td>${esc(q.status||"")}</td></tr>`).join("")}</tbody></table></div>`:empty("暂无报价。");
 
@@ -643,7 +621,8 @@ function generateFollowup(clientId){
   const orders=state.orders.filter(x=>x.clientId===clientId).sort((a,b)=>(b.piDate||"").localeCompare(a.piDate||""));
   const unpaid=orders.find(o=>["未付款","部分付款"].includes(o.paymentStatus));
   const openQuote=quotes.find(q=>!["成交","丢单","暂停"].includes(q.status));
-  const hello=c.contact?`Dear ${c.contact},`:"Dear Customer,", wh=c.contact?`Hi ${c.contact},`:"Hi,";
+  const rot=currentContactInfo(c),ct=rot.current,person=ct?.name||c.contact||"";
+  const hello=person?`Dear ${person},`:"Dear Customer,",wh=person?`Hi ${person},`:"Hi,";
   let strategy,email,wa;
 
   if(unpaid){
@@ -655,7 +634,7 @@ function generateFollowup(clientId){
     email=`Subject: Follow-up on quotation – ${openQuote.partNo||"your RFQ"}\n\n${hello}\n\nI’m following up on our quotation for ${openQuote.partNo||"your recent RFQ"}.\n\nPlease let me know if you have any feedback on the price, lead time or specification. If you have a target price, feel free to share it with me and I’ll check again with our team.\n\nBest regards`;
     wa=`${wh} I’m following up on our quotation for ${openQuote.partNo||"your recent RFQ"}. Do you have any feedback on the price or lead time? If you have a target price, feel free to send it to me.`;
   }else{
-    strategy=`当前没有未付款 PI 或有效报价，建议做轻量关系维护。最近沟通 ${comms[0]?fmtDate(comms[0].date):"暂无"}。`;
+    strategy=rot.pending?(rot.next?`当前联系人 ${contactLabel(ct)} 已${rot.reason}。不要继续重复发给同一个邮箱，建议切换到 ${contactLabel(rot.next)} 后重新从第 1 次开发开始。`:`当前联系人已${rot.reason}，并且没有更多可用联系人。建议转为沉睡客户，${state.settings.dormantDays||30} 天后重新检查。`):`当前开发联系人：${contactLabel(ct)}，已联系 ${ct?.touchCount||0}/${rot.limit} 次。最近沟通 ${comms[0]?fmtDate(comms[0].date):"暂无"}。`;
     email=`Subject: Quick follow-up\n\n${hello}\n\nJust checking in to see how things are going on your side.\n\nIf you have any new RFQs, BOM requirements or sourcing issues recently, feel free to send them to me.\n\nBest regards`;
     wa=`${wh} just checking in. If you have any new RFQs or component sourcing requirements recently, feel free to send them to me.`;
   }
@@ -690,6 +669,11 @@ const aliasLookup = (()=>{
   Object.entries(excelAliases).forEach(([field,arr])=>arr.forEach(x=>m.set(normalizeHeader(x),field)));
   return m;
 })();
+function fieldForHeader(h){
+  const n=normalizeHeader(h), direct=aliasLookup.get(n); if(direct) return direct;
+  if(/^(email|mail|邮箱|邮件)\d+$/.test(n)||/^email(?:address)?\d+$/.test(n)) return "email";
+  return null;
+}
 function normalizeDateValue(v){
   if(v===null||v===undefined||v==="") return "";
   if(v instanceof Date && !isNaN(v)){ const off=v.getTimezoneOffset(); return new Date(v.getTime()-off*60000).toISOString().slice(0,10); }
@@ -714,6 +698,49 @@ function normalizeCompanyKey(v){
   return normalizeLooseText(v).replace(/[^a-z0-9\u4e00-\u9fff]+/g,"");
 }
 function normalizeEmailKey(v){ return normalizeLooseText(v).replace(/\s+/g,""); }
+function extractEmails(...values){
+  const out=[], seen=new Set();
+  const add=v=>{
+    if(Array.isArray(v)){v.forEach(add);return}
+    const text=String(v||"");
+    const found=text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[];
+    found.forEach(raw=>{const e=raw.trim().replace(/[),.;:]+$/g,"");const k=e.toLowerCase();if(e&&!seen.has(k)){seen.add(k);out.push(e)}});
+  };
+  values.forEach(add); return out;
+}
+function rawClientEmails(c,{includeNotes=false}={}){
+  return extractEmails(c?.emails||[],c?.email||"",includeNotes?(c?.notes||""):"");
+}
+const CONTACT_STATUS_RANK={"未开始":0,"开发中":1,"已切换":1,"3次未回复":2,"无效":3,"已回复":4};
+function normalizeContactRecord(x={},fallback={}){
+  const email=extractEmails(x.email||fallback.email||"")[0]||"";
+  return {email,name:String(x.name??fallback.name??"").trim(),title:String(x.title??fallback.title??"").trim(),phone:String(x.phone??fallback.phone??"").trim(),whatsapp:String(x.whatsapp??fallback.whatsapp??"").trim(),status:String(x.status||fallback.status||"未开始"),touchCount:Number(x.touchCount??fallback.touchCount??0)||0,noReplyCount:Number(x.noReplyCount??fallback.noReplyCount??0)||0,lastContact:String(x.lastContact||fallback.lastContact||""),nextFollowUp:String(x.nextFollowUp||fallback.nextFollowUp||""),isPrimary:Boolean(x.isPrimary??fallback.isPrimary??false),invalid:Boolean(x.invalid??fallback.invalid??false),replied:Boolean(x.replied??fallback.replied??false)};
+}
+function mergeContactRecord(a,b){
+  const x=normalizeContactRecord(a), y=normalizeContactRecord(b), out={...x};
+  ["name","title","phone","whatsapp","lastContact","nextFollowUp"].forEach(k=>{if(!out[k]&&y[k])out[k]=y[k]});
+  out.touchCount=Math.max(x.touchCount||0,y.touchCount||0); out.noReplyCount=Math.max(x.noReplyCount||0,y.noReplyCount||0); out.invalid=x.invalid||y.invalid; out.replied=x.replied||y.replied; out.isPrimary=x.isPrimary||y.isPrimary; out.status=(CONTACT_STATUS_RANK[y.status]||0)>(CONTACT_STATUS_RANK[x.status]||0)?y.status:x.status; if(out.replied)out.status="已回复"; else if(out.invalid)out.status="无效"; return out;
+}
+function getClientContacts(c,{includeNotes=false}={}){
+  const map=new Map(),order=[]; const add=(item,fallback={})=>{const r=normalizeContactRecord(item,fallback);if(!r.email)return;const k=r.email.toLowerCase();if(!map.has(k)){map.set(k,r);order.push(k)}else map.set(k,mergeContactRecord(map.get(k),r));};
+  (Array.isArray(c?.contacts)?c.contacts:[]).forEach(x=>add(x));
+  rawClientEmails(c,{includeNotes}).forEach((email,i)=>add({email},{name:i===0?String(c?.contact||"").trim():"",title:i===0?String(c?.title||"").trim():"",phone:i===0?String(c?.phone||"").trim():"",whatsapp:i===0?String(c?.whatsapp||"").trim():""}));
+  return order.map(k=>map.get(k));
+}
+function getClientEmails(c,{includeNotes=false}={}){ const contacts=getClientContacts(c,{includeNotes}); return contacts.length?contacts.map(x=>x.email):rawClientEmails(c,{includeNotes}); }
+function normalizeClientEmails(c,{includeNotes=false}={}){ const contacts=getClientContacts(c,{includeNotes}); const emails=contacts.map(x=>x.email); c.contacts=contacts;c.emails=emails;c.email=emails[0]||""; if(!c.currentContactEmail||!emails.some(e=>e.toLowerCase()===String(c.currentContactEmail).toLowerCase())){const preferred=contacts.find(x=>x.isPrimary||x.replied)||contacts.find(x=>!x.invalid)||contacts[0];c.currentContactEmail=preferred?.email||"";} return c; }
+function sameEmailList(a,b){ const x=getClientEmails(a,{includeNotes:true}).map(e=>e.toLowerCase()).sort(); const y=getClientEmails(b,{includeNotes:true}).map(e=>e.toLowerCase()).sort(); return JSON.stringify(x)===JSON.stringify(y); }
+function currentContactInfo(c){
+  const contacts=getClientContacts(c,{includeNotes:true}); if(!contacts.length)return{contacts:[],current:null,index:-1,next:null,pending:false,reason:"",allDone:false,limit:Math.max(1,Number(state.settings.contactNoReplyLimit||3))};
+  let idx=contacts.findIndex(x=>x.email.toLowerCase()===String(c?.currentContactEmail||"").toLowerCase()); if(idx<0)idx=contacts.findIndex(x=>x.isPrimary||x.replied); if(idx<0)idx=0; const current=contacts[idx],limit=Math.max(1,Number(state.settings.contactNoReplyLimit||3));
+  const candidates=contacts.map((x,i)=>({x,i})).filter(({x,i})=>i!==idx&&!x.invalid&&!x.replied&&(x.noReplyCount||0)<limit); const next=(candidates.find(z=>z.i>idx)||candidates[0]||{}).x||null; const pending=!current.replied&&(current.invalid||(current.noReplyCount||0)>=limit); const allDone=pending&&!next; const reason=current.invalid?"邮箱无效/退信":((current.noReplyCount||0)>=limit?`连续 ${limit} 次未回复`:""); return{contacts,current,index:idx,next,pending,reason,allDone,limit};
+}
+function contactLabel(x){return x?(x.name?`${x.name} · ${x.email}`:x.email):"—";}
+function buildContactsFromEditedClient(obj,existing={}){
+  const emails=extractEmails(obj.email),oldMap=new Map(getClientContacts(existing,{includeNotes:true}).map(x=>[x.email.toLowerCase(),x])),activeKey=String(existing.currentContactEmail||"").toLowerCase();
+  const contacts=emails.map((email,i)=>{const old=oldMap.get(email.toLowerCase())||{},r=normalizeContactRecord(old,{email});if((activeKey&&email.toLowerCase()===activeKey)||(!activeKey&&i===0)){if(obj.contact)r.name=String(obj.contact).trim();if(obj.title)r.title=String(obj.title).trim();if(obj.phone)r.phone=String(obj.phone).trim();if(obj.whatsapp)r.whatsapp=String(obj.whatsapp).trim();}return r;});
+  obj.contacts=contacts;obj.emails=emails;obj.email=emails[0]||"";obj.currentContactEmail=(existing.currentContactEmail&&emails.some(e=>e.toLowerCase()===activeKey))?existing.currentContactEmail:(contacts.find(x=>x.isPrimary||x.replied)||contacts.find(x=>!x.invalid)||contacts[0])?.email||"";obj.contactRotationStatus=existing.contactRotationStatus||(contacts.length?"active":"");return obj;
+}
 function normalizePhoneKey(v){ return String(v||"").replace(/\D+/g,""); }
 function normalizeDomain(v){
   let s=normalizeLooseText(v); if(!s) return "";
@@ -730,8 +757,8 @@ const CCTLD_COUNTRY=[
 const PHONE_COUNTRY_PREFIXES=[["971","AE"],["375","BY"],["380","UA"],["94","LK"],["90","TR"],["55","BR"],["27","ZA"],["62","ID"],["86","CN"],["7","RU"]];
 function inferCountryCodeFromClient(c){
   let code=resolveCountryCode(c?.country); if(code) return code;
-  const domain=normalizeDomain(c?.website||c?.email||"");
-  for(const [re,cc] of CCTLD_COUNTRY){ if(domain && re.test(domain)) return cc; }
+  const domains=[normalizeDomain(c?.website||""),...getClientEmails(c,{includeNotes:true}).map(normalizeDomain)].filter(Boolean);
+  for(const domain of domains){ for(const [re,cc] of CCTLD_COUNTRY){ if(re.test(domain)) return cc; } }
   let phone=String(c?.phone||c?.whatsapp||"").replace(/\D+/g,"");
   if(phone.startsWith("00")) phone=phone.slice(2);
   for(const [prefix,cc] of PHONE_COUNTRY_PREFIXES){ if(phone.startsWith(prefix)) return cc; }
@@ -748,14 +775,15 @@ function countriesCompatible(a,b){
   return !ca||!cb||ca===cb;
 }
 function clientIdentifiers(c){
+  const emails=getClientEmails(c,{includeNotes:true}).map(normalizeEmailKey).filter(Boolean);
   return {
-    company:normalizeCompanyKey(c?.company), email:normalizeEmailKey(c?.email), domain:normalizeDomain(c?.website),
+    company:normalizeCompanyKey(c?.company), emails, email:emails[0]||"", domain:normalizeDomain(c?.website),
     phone:normalizePhoneKey(c?.phone||c?.whatsapp), country:inferCountryCodeFromClient(c)
   };
 }
 function sameClient(a,b){
   const x=clientIdentifiers(a), y=clientIdentifiers(b);
-  if(x.email&&y.email&&x.email===y.email) return true;
+  if(x.emails.length&&y.emails.length&&x.emails.some(e=>y.emails.includes(e))) return true;
   if(x.domain&&y.domain&&x.domain===y.domain) return true;
   if(x.company&&y.company&&x.company===y.company&&countriesCompatible(a,b)) return true;
   if(x.company&&y.company&&x.company===y.company&&x.phone&&y.phone&&x.phone===y.phone) return true;
@@ -768,19 +796,21 @@ function appendUniqueNote(notes,line){
   return base?`${base}\n${line}`:line;
 }
 function mergeClientData(base,incoming,{fromExcel=false}={}){
-  const out={...base}; const src={...incoming}; canonicalizeClientCountry(src);
-  const fill=["country","city","website","contact","title","email","phone","whatsapp","linkedin","facebook","telegram","lastContact","nextFollowUp"];
+  const out={...base},src={...incoming};normalizeClientEmails(out,{includeNotes:true});normalizeClientEmails(src,{includeNotes:true});canonicalizeClientCountry(src);
+  const contactMap=new Map();[...getClientContacts(out,{includeNotes:true}),...getClientContacts(src,{includeNotes:true})].forEach(c=>{const k=c.email.toLowerCase();contactMap.set(k,contactMap.has(k)?mergeContactRecord(contactMap.get(k),c):normalizeContactRecord(c));});out.contacts=[...contactMap.values()];
+  const baseEmails=getClientEmails(out,{includeNotes:true}),incomingEmails=getClientEmails(src,{includeNotes:true});const allEmails=extractEmails(baseEmails,incomingEmails);out.emails=allEmails;out.email=allEmails[0]||"";const activeCandidate=String(out.currentContactEmail||src.currentContactEmail||"");out.currentContactEmail=allEmails.find(e=>e.toLowerCase()===activeCandidate.toLowerCase())||(out.contacts.find(x=>x.isPrimary||x.replied)||out.contacts.find(x=>!x.invalid)||out.contacts[0])?.email||"";out.contactRotationStatus=out.contactRotationStatus||src.contactRotationStatus||(allEmails.length?"active":"");
+  const fill=["country","city","website","contact","title","phone","whatsapp","linkedin","facebook","telegram","lastContact","nextFollowUp"];
   fill.forEach(k=>{ if(!String(out[k]||"").trim()&&String(src[k]||"").trim()) out[k]=src[k]; });
   if((GRADE_RANK[src.grade]||0)>(GRADE_RANK[out.grade]||0)) out.grade=src.grade;
   if((STATUS_RANK[src.status]??0)>(STATUS_RANK[out.status]??0)) out.status=src.status;
   let notes=out.notes||"";
   const extras=[];
-  [["联系人","contact"],["职位","title"],["Email","email"],["电话","phone"],["WhatsApp","whatsapp"]].forEach(([label,k])=>{
+  [["联系人","contact"],["职位","title"],["电话","phone"],["WhatsApp","whatsapp"]].forEach(([label,k])=>{
     const a=String(out[k]||"").trim(), b=String(src[k]||"").trim(); if(a&&b&&normalizeLooseText(a)!==normalizeLooseText(b)) extras.push(`${label}: ${b}`);
   });
   if(String(src.notes||"").trim()&&String(src.notes||"").trim()!==String(notes||"").trim()) notes=appendUniqueNote(notes,String(src.notes).trim());
   if(extras.length) notes=appendUniqueNote(notes,`${fromExcel?"Excel补充资料":"合并补充资料"}：${extras.join("；")}`);
-  out.notes=notes;
+  out.notes=notes; normalizeClientEmails(out,{includeNotes:true});
   if(src.country){
     const cc=inferCountryCodeFromClient(src); if(cc) out.country=countryDisplayName(cc);
   } else canonicalizeClientCountry(out);
@@ -798,15 +828,21 @@ function consolidateImportedRows(rows){
   return {rows:out,merged};
 }
 function rowToClient(headers,row){
-  const obj={grade:"C",status:"新客户"};
-  headers.forEach((h,i)=>{ const field=aliasLookup.get(normalizeHeader(h)); if(field && row[i]!==undefined && row[i]!==null) obj[field]=String(row[i]).trim(); });
+  const obj={grade:"C",status:"新客户"}, emailValues=[];
+  headers.forEach((h,i)=>{
+    const field=fieldForHeader(h);
+    if(field && row[i]!==undefined && row[i]!==null){
+      if(field==="email") emailValues.push(row[i]); else obj[field]=String(row[i]).trim();
+    }
+  });
+  const emails=extractEmails(emailValues);obj.emails=emails;obj.email=emails[0]||"";obj.contacts=emails.map(email=>normalizeContactRecord({email,name:obj.contact||"",title:obj.title||"",phone:obj.phone||"",whatsapp:obj.whatsapp||""}));obj.currentContactEmail=emails[0]||"";obj.contactRotationStatus=emails.length?"active":"";
   obj.company=String(obj.company||"").trim(); obj.grade=normalizeGrade(obj.grade); obj.status=normalizeStatus(obj.status);
   obj.lastContact=normalizeDateValue(obj.lastContact); obj.nextFollowUp=normalizeDateValue(obj.nextFollowUp);
   canonicalizeClientCountry(obj);
   return obj;
 }
 function clientDupKey(c){
-  const x=clientIdentifiers(c); return x.email?`e:${x.email}`:x.domain?`w:${x.domain}`:x.company?`c:${x.company}`:"";
+  const x=clientIdentifiers(c); return x.emails[0]?`e:${x.emails[0]}`:x.domain?`w:${x.domain}`:x.company?`c:${x.company}`:"";
 }
 function showExcelStatus(text,kind=""){ const el=$("excelImportStatus"); el.textContent=text; el.style.color=kind==="err"?"#a44f4f":""; }
 function resetExcelImport(){ excelImportRows=[];excelImportFileName="";$("excelImportBtn").disabled=true;$("excelPreview").innerHTML="";showExcelStatus("尚未选择文件。");$("excelFileInput").value=""; }
@@ -836,7 +872,7 @@ async function readExcelFile(file){
     }
     if(!matrix.length) throw new Error("表格为空。请确认第一行是表头。");
     const headers=matrix[0].map(x=>String(x||"").trim());
-    const recognized=headers.map(h=>aliasLookup.get(normalizeHeader(h))).filter(Boolean);
+    const recognized=headers.map(fieldForHeader).filter(Boolean);
     if(!recognized.includes("company")) throw new Error("没有识别到“客户名称/公司名称/Company”列。请把公司名称放在第一行表头中。");
     const rows=matrix.slice(1).map(r=>rowToClient(headers,r)).filter(c=>Object.values(c).some(v=>String(v||"").trim()));
     const valid=rows.filter(c=>c.company);
@@ -846,7 +882,7 @@ async function readExcelFile(file){
     const mapped=[...new Set(recognized)].map(f=>({company:"公司",country:"国家",city:"城市",website:"官网",grade:"等级",status:"状态",contact:"联系人",title:"职位",email:"Email",phone:"电话",whatsapp:"WhatsApp",linkedin:"LinkedIn",facebook:"Facebook",telegram:"Telegram",lastContact:"最后联系",nextFollowUp:"下次跟进",notes:"备注"}[f]||f));
     showExcelStatus(`已读取 ${file.name}：有效客户 ${valid.length} 行${invalid?`，另有 ${invalid} 行缺少公司名称将跳过`:""}。识别列：${mapped.join("、")}。`);
     $("excelImportBtn").disabled=false;
-    $("excelPreview").innerHTML=`<div class="table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>联系人</th><th>Email</th><th>WhatsApp</th><th>状态</th></tr></thead><tbody>${valid.slice(0,8).map(c=>`<tr><td><b>${esc(c.company)}</b></td><td>${esc(c.country||"")}</td><td>${esc(c.contact||"")}</td><td>${esc(c.email||"")}</td><td>${esc(c.whatsapp||"")}</td><td>${esc(c.status||"")}</td></tr>`).join("")}</tbody></table></div>${valid.length>8?`<div class="item-meta" style="margin-top:6px">仅预览前 8 行，共 ${valid.length} 行。</div>`:""}`;
+    $("excelPreview").innerHTML=`<div class="table-wrap"><table><thead><tr><th>客户</th><th>国家</th><th>联系人</th><th>Email</th><th>WhatsApp</th><th>状态</th></tr></thead><tbody>${valid.slice(0,8).map(c=>`<tr><td><b>${esc(c.company)}</b></td><td>${esc(c.country||"")}</td><td>${esc(c.contact||"")}</td><td>${esc(getClientEmails(c,{includeNotes:true}).join("; "))}</td><td>${esc(c.whatsapp||"")}</td><td>${esc(c.status||"")}</td></tr>`).join("")}</tbody></table></div>${valid.length>8?`<div class="item-meta" style="margin-top:6px">仅预览前 8 行，共 ${valid.length} 行。</div>`:""}`;
   }catch(err){ excelImportRows=[];$("excelImportBtn").disabled=true;$("excelPreview").innerHTML="";showExcelStatus("读取失败："+err.message,"err"); }
 }
 $("excelImportBtn")?.addEventListener("click",async()=>{
@@ -893,7 +929,7 @@ $("cleanClientsBtn")?.addEventListener("click",async()=>{
   const buckets=new Map();
   for(const c of state.clients){
     const x=clientIdentifiers(c); const keys=[];
-    if(x.email) keys.push(`e:${x.email}`); if(x.domain) keys.push(`w:${x.domain}`); if(x.company) keys.push(`c:${x.company}`);
+    x.emails.forEach(e=>keys.push(`e:${e}`)); if(x.domain) keys.push(`w:${x.domain}`); if(x.company) keys.push(`c:${x.company}`);
     for(const key of keys){
       const ids=buckets.get(key)||[];
       for(const id of ids){ const other=byId.get(id); if(other&&sameClient(c,other)) union(c.id,id); }
@@ -903,13 +939,18 @@ $("cleanClientsBtn")?.addEventListener("click",async()=>{
   const groups=new Map(); state.clients.forEach(c=>{const r=find(c.id);(groups.get(r)||groups.set(r,[]).get(r)).push(c)});
   const dups=[...groups.values()].filter(g=>g.length>1);
   const inferable=state.clients.filter(c=>!resolveCountryCode(c.country)&&inferCountryCodeFromClient(c)).length;
-  if(!dups.length&&!inferable){alert("没有发现需要合并的重复客户，也没有可自动补全的国家。");return}
-  if(!confirm(`检测到 ${dups.reduce((n,g)=>n+g.length-1,0)} 条重复客户需要合并；另有约 ${inferable} 条客户可自动补全国家。\n\n系统会保留资料更完整的一条，并把报价、PI、沟通、任务、附件关联到保留客户。确认继续吗？`))return;
+  const emailRepairable=state.clients.filter(c=>{
+    const stored=extractEmails(c?.emails||[],c?.email||"").map(e=>e.toLowerCase()).sort();
+    const repaired=getClientEmails(c,{includeNotes:true}).map(e=>e.toLowerCase()).sort();
+    return JSON.stringify(stored)!==JSON.stringify(repaired);
+  }).length;
+  if(!dups.length&&!inferable&&!emailRepairable){alert("没有发现需要合并的重复客户，也没有需要修复的多邮箱或可自动补全的国家。");return}
+  if(!confirm(`检测到 ${dups.reduce((n,g)=>n+g.length-1,0)} 条重复客户需要合并；约 ${emailRepairable} 家客户可修复/补全多邮箱；另有约 ${inferable} 条客户可自动补全国家。\n\n系统会保留资料更完整的一条，并把同一公司的所有邮箱合并保留。报价、PI、沟通、任务、附件也会关联到保留客户。确认继续吗？`))return;
   sync("busy","正在清理客户数据…");
   try{
     const relationSets=[state.communications,state.quotes,state.orders,state.tasks,state.files];
-    const ops=[]; const duplicateIds=new Set();
-    const completeness=c=>["country","city","website","contact","title","email","phone","whatsapp","linkedin","facebook","telegram","notes","nextFollowUp","lastContact"].reduce((n,k)=>n+(String(c[k]||"").trim()?1:0),0)+relationSets.reduce((n,arr)=>n+arr.filter(x=>x.clientId===c.id).length*2,0);
+    const ops=[]; const duplicateIds=new Set(); let repairedEmails=0;
+    const completeness=c=>["country","city","website","contact","title","phone","whatsapp","linkedin","facebook","telegram","notes","nextFollowUp","lastContact"].reduce((n,k)=>n+(String(c[k]||"").trim()?1:0),0)+getClientEmails(c,{includeNotes:true}).length+relationSets.reduce((n,arr)=>n+arr.filter(x=>x.clientId===c.id).length*2,0);
     for(const group of dups){
       const sorted=[...group].sort((a,b)=>completeness(b)-completeness(a)); const keeper=sorted[0]; let merged={...keeper};
       for(const d of sorted.slice(1)){ merged=mergeClientData(merged,d); duplicateIds.add(d.id); }
@@ -921,11 +962,17 @@ $("cleanClientsBtn")?.addEventListener("click",async()=>{
       }
     }
     for(const c of state.clients){
-      if(duplicateIds.has(c.id)) continue; const code=inferCountryCodeFromClient(c); if(code&&resolveCountryCode(c.country)!==code) ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,"clients",c.id),data:{country:countryDisplayName(code),updatedAt:serverTimestamp()}});
+      if(duplicateIds.has(c.id)) continue;
+      const patch={};
+      const emails=getClientEmails(c,{includeNotes:true});
+      const stored=extractEmails(c?.emails||[],c?.email||"");
+      if(JSON.stringify(emails.map(e=>e.toLowerCase()).sort())!==JSON.stringify(stored.map(e=>e.toLowerCase()).sort())){ patch.emails=emails; patch.email=emails[0]||""; repairedEmails++; }
+      const code=inferCountryCodeFromClient(c); if(code&&resolveCountryCode(c.country)!==code) patch.country=countryDisplayName(code);
+      if(Object.keys(patch).length) ops.push({kind:"update",ref:doc(db,"users",currentUser.uid,"clients",c.id),data:{...patch,updatedAt:serverTimestamp()}});
     }
     for(let i=0;i<ops.length;i+=300){ const batch=writeBatch(db); ops.slice(i,i+300).forEach(op=>op.kind==="update"?batch.update(op.ref,op.data):batch.delete(op.ref)); await batch.commit(); }
     await autoTrackCountriesFromNames(state.clients.map(c=>countryDisplayName(inferCountryCodeFromClient(c))).filter(Boolean));
-    sync("ok","已自动同步"); alert(`清理完成：合并删除 ${duplicateIds.size} 条重复客户，并自动补全可识别国家。`);
+    sync("ok","已自动同步"); alert(`清理完成：合并删除 ${duplicateIds.size} 条重复客户；修复/补全 ${repairedEmails} 家客户的多邮箱；并自动补全可识别国家。`);
   }catch(err){console.error(err);sync("err","清理失败");alert("清理失败："+err.message)}
 });
 
@@ -1016,6 +1063,8 @@ $("migrationBtn").addEventListener("click",async()=>{
 function renderSettings(){
   $("setQuoteDays").value=state.settings.quoteFollowDays??5;
   $("setDormantDays").value=state.settings.dormantDays??30;
+  if($("setContactNoReplyLimit")) $("setContactNoReplyLimit").value=state.settings.contactNoReplyLimit??3;
+  if($("setContactFollowDays")) $("setContactFollowDays").value=state.settings.contactFollowDays??3;
   $("setWeekend").value=String(state.settings.weekendFollow??false);
   $("setCurrency").value=state.settings.currency||"USD";
   if($("setBackupReminderDays")) $("setBackupReminderDays").value=String(state.settings.backupReminderDays??7);
@@ -1024,6 +1073,7 @@ function renderSettings(){
 $("saveSettingsBtn").addEventListener("click",async()=>{
   const data={
     quoteFollowDays:Number($("setQuoteDays").value||5),dormantDays:Number($("setDormantDays").value||30),
+    contactNoReplyLimit:Number($("setContactNoReplyLimit")?.value||3),contactFollowDays:Number($("setContactFollowDays")?.value||3),
     weekendFollow:$("setWeekend").value==="true",currency:$("setCurrency").value,
     backupReminderDays:Number($("setBackupReminderDays")?.value||7)
   };
@@ -1055,7 +1105,7 @@ function backupFileName(){
 function buildBackupPayload(){
   return backupPlain({
     backupFormat:"AI-Trade-Workspace-Full-Backup",
-    version:"V3.1.4",
+    version:"V3.1.5",
     exportedAt:new Date().toISOString(),
     account:{email:currentUser?.email||"",uid:currentUser?.uid||""},
     clients:state.clients,
