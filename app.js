@@ -1,21 +1,21 @@
 import { firebaseConfig } from "./firebase-config.js";
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup,
   onAuthStateChanged, signOut, setPersistence, browserLocalPersistence
-} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-auth.js";
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc,
   getDoc, getDocs, onSnapshot, query, where, orderBy, serverTimestamp, writeBatch
-} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // ============================================================
 // 1. Firebase 初始化
 // ============================================================
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-setPersistence(auth, browserLocalPersistence).catch(e=>console.warn("auth persistence", e));
+try { await setPersistence(auth, browserLocalPersistence); } catch(e) { console.warn("auth persistence", e); }
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
@@ -287,6 +287,7 @@ async function doLogin(){
 }
 $("googleLoginBtn").addEventListener("click", doLogin);
 document.documentElement.dataset.appReady="1";
+if($("googleLoginBtn")){ $("googleLoginBtn").disabled=false; $("googleLoginBtn").textContent="使用 Google 登录"; }
 $("logoutBtn").addEventListener("click", ()=>signOut(auth));
 
 onAuthStateChanged(auth, async user=>{
@@ -1646,6 +1647,4 @@ window.closeModal=id=>$(id).classList.remove("show");
 document.querySelectorAll(".modal-bg").forEach(x=>x.addEventListener("click",e=>{if(e.target===x)x.classList.remove("show")}));
 document.addEventListener("click",e=>{if(innerWidth<=820&&!e.target.closest(".sidebar")&&!e.target.closest("#menuBtn"))$("sidebar").classList.remove("open")});
 
-if("serviceWorker" in navigator){
-  window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(console.warn));
-}
+// V3.2.4 老电脑兼容版：暂不注册 Service Worker，避免旧缓存影响登录与升级。
