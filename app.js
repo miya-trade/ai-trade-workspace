@@ -830,35 +830,38 @@ function clientDevelopmentInfo(c) {
     var stage = touches === 0 ? "待开发" : ("待" + label);
     return { active: true, rot: rot, stage: stage, action: "outreach", actionLabel: label, dueDate: due, priority: (nextNumber >= limit || c.grade === "A") ? "high" : "normal", note: "当前联系人：" + contactLabel(ct) + " · 已联系 " + touches + "/" + limit + " 次" };
 }
-function getFollowups() {
+function getFollowups(opts) {
+    opts = opts || {};
+    var cutoff = opts.throughDate || todayISO();
+    var includeWaiting = !!opts.includeWaiting;
     var out = [];
     var weekend = isWeekend() && !state.settings.weekendFollow;
     state.orders.forEach(function (o) {
         if (["未付款", "部分付款"].includes(o.paymentStatus))
-            out.push({ type: "order", id: o.id, priority: "high", category: "business", title: clientName(o.clientId) + " · " + (o.piNo || "PI"), meta: (o.paymentStatus || "待付款") + " · " + (o.amount || 0) + " " + (o.currency || state.settings.currency), stage: "PI付款" });
+            out.push({ type: "order", id: o.id, clientId: o.clientId, priority: "high", category: "business", title: clientName(o.clientId) + " · " + (o.piNo || "PI"), meta: (o.paymentStatus || "待付款") + " · " + (o.amount || 0) + " " + (o.currency || state.settings.currency), stage: "PI付款" });
     });
     state.rfqs.forEach(function (r) {
         var due = r.nextFollowUp || (r.requestDate ? addDays(r.requestDate, state.settings.rfqFollowDays || 2) : "");
-        if (due && due <= todayISO() && !["已全部报价", "客户取消", "已结束"].includes(r.status || "")) {
+        if (due && due <= cutoff && !["已全部报价", "客户取消", "已结束"].includes(r.status || "")) {
             var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
-            out.push({ type: "rfq", id: r.id, priority: overdue >= 2 ? "high" : "normal", category: "business", title: clientName(r.clientId) + " · RFQ " + (r.rfqNo || r.subject || "询价"), meta: (r.status || "待处理") + " · " + (r.itemCount || 0) + "项 · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "RFQ处理", dueDate: due });
+            out.push({ type: "rfq", id: r.id, clientId: r.clientId, priority: overdue >= 2 ? "high" : "normal", category: "business", title: clientName(r.clientId) + " · RFQ " + (r.rfqNo || r.subject || "询价"), meta: (r.status || "待处理") + " · " + (r.itemCount || 0) + "项 · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "RFQ处理", dueDate: due });
         }
     });
     state.samples.forEach(function (smp) {
         var due = smp.nextFollowUp || smp.feedbackDueDate || smp.expectedArrival || "";
         var active = !["测试通过", "测试未通过", "已结束", "取消"].includes(smp.status || "");
-        if (active && due && due <= todayISO()) {
+        if (active && due && due <= cutoff) {
             var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
             var what = smp.partNo || smp.itemName || "样品";
             var meta = (smp.status || "样品跟进") + " · " + (overdue ? "逾期" + overdue + "天" : "今天到期") + (smp.tracking ? " · " + smp.tracking : "");
-            out.push({ type: "sample", id: smp.id, priority: ["已签收待测试", "测试中"].includes(smp.status) ? "high" : "normal", category: "business", title: clientName(smp.clientId) + " · 样品 " + what, meta: meta, stage: "样品跟进", dueDate: due });
+            out.push({ type: "sample", id: smp.id, clientId: smp.clientId, priority: ["已签收待测试", "测试中"].includes(smp.status) ? "high" : "normal", category: "business", title: clientName(smp.clientId) + " · 样品 " + what, meta: meta, stage: "样品跟进", dueDate: due });
         }
     });
     state.quotes.forEach(function (q) {
         var due = q.nextFollowUp || (q.quoteDate ? addDays(q.quoteDate, state.settings.quoteFollowDays) : "");
-        if (due && due <= todayISO() && !["成交", "丢单", "暂停"].includes(q.status)) {
+        if (due && due <= cutoff && !["成交", "丢单", "暂停"].includes(q.status)) {
             var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
-            out.push({ type: "quote", id: q.id, priority: overdue >= 5 ? "high" : "normal", category: "business", title: clientName(q.clientId) + " · " + (q.partNo || q.batchName || "报价"), meta: (q.status || "已报价") + " · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "报价跟进", dueDate: due });
+            out.push({ type: "quote", id: q.id, clientId: q.clientId, priority: overdue >= 5 ? "high" : "normal", category: "business", title: clientName(q.clientId) + " · " + (q.partNo || q.batchName || "报价"), meta: (q.status || "已报价") + " · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "报价跟进", dueDate: due });
         }
     });
     state.clients.forEach(function (c) {
@@ -866,21 +869,39 @@ function getFollowups() {
         var dev = clientDevelopmentInfo(c);
         if (dev.active) {
             var due = dev.dueDate || todayISO();
-            if (due <= todayISO()) {
+            if (due <= cutoff || (includeWaiting && dev.action === "wait")) {
                 var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
                 var owner = assignmentLabel(c, { email: false });
                 var meta = dev.note || "";
                 if (overdue) meta += " · 逾期" + overdue + "天";
                 if (owner) meta += " · " + owner;
-                out.push({ type: "client", id: c.id, priority: dev.priority || "normal", category: "development", title: c.company, meta: meta, stage: dev.stage, action: dev.action, actionLabel: dev.actionLabel, dueDate: due });
+                out.push({ type: "client", id: c.id, clientId: c.id, priority: dev.priority || "normal", category: "development", title: c.company, meta: meta, stage: dev.stage, action: dev.action, actionLabel: dev.actionLabel, dueDate: due });
             }
             return;
         }
-        if (c.nextFollowUp && c.nextFollowUp <= todayISO()) {
+        if (c.nextFollowUp && c.nextFollowUp <= cutoff) {
             var long = ["长期维护", "沉睡客户"].includes(c.status), rot = currentContactInfo(c);
             var current = rot.current ? " · 当前 " + contactLabel(rot.current) : "";
-            out.push({ type: "client", id: c.id, priority: long ? "long" : c.grade === "A" ? "high" : "normal", category: long ? "long" : "business", title: c.company, meta: (c.country || "") + " · " + (c.status || "") + current + " · " + assignmentLabel(c, { email: false }), stage: long ? "长期维护" : "客户跟进", dueDate: c.nextFollowUp });
+            out.push({ type: "client", id: c.id, clientId: c.id, priority: long ? "long" : c.grade === "A" ? "high" : "normal", category: long ? "long" : "business", title: c.company, meta: (c.country || "") + " · " + (c.status || "") + current + " · " + assignmentLabel(c, { email: false }), stage: long ? "长期维护" : "客户跟进", dueDate: c.nextFollowUp });
         }
+    });
+    out.forEach(function (x) {
+        var cid = x.clientId || (x.type === "client" ? x.id : "");
+        var c = cid ? state.clients.find(function (z) { return z.id === cid; }) : null;
+        if (c) {
+            var a = clientAssignment(c);
+            x.clientId = cid;
+            x.ownerSalesperson = a.salesperson || "";
+            x.ownerCompany = a.company || "";
+            x.ownerEmail = a.email || "";
+            x.country = c.country || "";
+            x.grade = c.grade || "";
+            x.clientStatus = c.status || "";
+        }
+        x.isOverdue = !!x.dueDate && x.dueDate < todayISO();
+        x.isToday = x.dueDate === todayISO();
+        x.isWaiting = x.action === "wait" || String(x.stage || "").indexOf("等待回复") >= 0;
+        x.isBounce = String(x.stage || "").indexOf("退信") >= 0 || String(x.meta || "").indexOf("退信") >= 0;
     });
     var rank = { high: 3, normal: 2, long: 1 }, map = new Map();
     out.forEach(function (x) { var k = x.type + ":" + x.id; if (!map.has(k) || rank[x.priority] > rank[map.get(k).priority]) map.set(k, x); });
@@ -971,24 +992,108 @@ function followupActionHtml(x) {
 }
 function renderFollowupItem(x) {
     var stage = x.stage ? " <span class=\"badge follow-stage " + (x.priority === "high" ? "red" : x.priority === "long" ? "green" : "orange") + "\">" + esc(x.stage) + "</span>" : "";
-    return "<div class=\"item follow-item\"><div class=\"follow-main\" onclick=\"openLinked('" + x.type + "','" + x.id + "')\"><div class=\"item-title\">" + esc(x.title) + stage + "</div><div class=\"item-meta\">" + esc(x.meta) + "</div></div>" + followupActionHtml(x) + "</div>";
+    var due = "";
+    if (x.dueDate) {
+        var cls = x.dueDate < todayISO() ? "overdue" : (x.dueDate === todayISO() ? "today" : "");
+        var label = x.dueDate < todayISO() ? "逾期" : (x.dueDate === todayISO() ? "今天" : "到期");
+        due = " · <span class=\"follow-due " + cls + "\">" + label + " " + esc(fmtDate(x.dueDate)) + "</span>";
+    }
+    var owner = x.ownerSalesperson && String(x.meta || "").indexOf(x.ownerSalesperson) < 0 ? " · " + esc(x.ownerSalesperson) : "";
+    return "<div class=\"item follow-item\"><div class=\"follow-main\" onclick=\"openLinked('" + x.type + "','" + x.id + "')\"><div class=\"item-title\">" + esc(x.title) + stage + "</div><div class=\"item-meta\">" + esc(x.meta) + owner + due + "</div></div>" + followupActionHtml(x) + "</div>";
 }
+function endOfWeekISO() {
+    var d = new Date();
+    d.setHours(12, 0, 0, 0);
+    var day = d.getDay();
+    var add = day === 0 ? 0 : 7 - day;
+    d.setDate(d.getDate() + add);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function startOfWeekISO() {
+    var d = new Date();
+    d.setHours(12, 0, 0, 0);
+    var day = d.getDay();
+    var sub = day === 0 ? 6 : day - 1;
+    d.setDate(d.getDate() - sub);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function setSelectOptionsKeep(id, firstLabel, values) {
+    var el = $(id);
+    if (!el) return;
+    var old = el.value || "";
+    el.innerHTML = '<option value="">' + esc(firstLabel) + '</option>' + values.map(function (v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join("");
+    if (values.indexOf(old) >= 0) el.value = old;
+}
+window.applyFollowQuick = function (v) {
+    if ($("followTimeFilter")) $("followTimeFilter").value = v || "all";
+    renderFollowups();
+};
 function renderFollowups() {
-    var f = getFollowups();
+    var all = getFollowups({ throughDate: endOfWeekISO(), includeWaiting: true });
+    var owners = Array.from(new Set(all.map(function (x) { return x.ownerSalesperson; }).filter(Boolean))).sort();
+    var companies = Array.from(new Set(all.map(function (x) { return x.ownerCompany; }).filter(Boolean))).sort();
+    var countries = Array.from(new Set(all.map(function (x) { return x.country; }).filter(Boolean))).sort();
+    var stages = Array.from(new Set(all.map(function (x) { return x.stage; }).filter(Boolean))).sort();
+    setSelectOptionsKeep("followOwnerFilter", "全部业务员", owners);
+    setSelectOptionsKeep("followCompanyFilter", "全部公司", companies);
+    setSelectOptionsKeep("followCountryFilter", "全部国家", countries);
+    setSelectOptionsKeep("followStageFilter", "全部阶段", stages);
+
+    var q = ($("followSearch") ? $("followSearch").value : "").toLowerCase().trim();
+    var owner = $("followOwnerFilter") ? $("followOwnerFilter").value : "";
+    var company = $("followCompanyFilter") ? $("followCompanyFilter").value : "";
+    var country = $("followCountryFilter") ? $("followCountryFilter").value : "";
+    var grade = $("followGradeFilter") ? $("followGradeFilter").value : "";
+    var stage = $("followStageFilter") ? $("followStageFilter").value : "";
+    var priority = $("followPriorityFilter") ? $("followPriorityFilter").value : "";
+    var time = $("followTimeFilter") ? $("followTimeFilter").value : "all";
+
+    var base = all.filter(function (x) {
+        var hay = [x.title, x.meta, x.ownerSalesperson, x.ownerCompany, x.ownerEmail, x.country, x.stage, x.grade].join(" ").toLowerCase();
+        return (!q || hay.indexOf(q) >= 0) && (!owner || x.ownerSalesperson === owner) && (!company || x.ownerCompany === company) && (!country || x.country === country) && (!grade || x.grade === grade) && (!stage || x.stage === stage) && (!priority || x.priority === priority);
+    });
+
+    var summary = {
+        today: base.filter(function (x) { return x.dueDate === todayISO(); }).length,
+        overdue: base.filter(function (x) { return x.dueDate && x.dueDate < todayISO(); }).length,
+        waiting: base.filter(function (x) { return x.isWaiting; }).length,
+        bounce: base.filter(function (x) { return x.isBounce; }).length,
+        pi: base.filter(function (x) { return x.stage === "PI付款"; }).length,
+        sample: base.filter(function (x) { return x.stage === "样品跟进"; }).length
+    };
+    if ($("followSummary")) {
+        $("followSummary").innerHTML = [
+            ["today", "今天", summary.today], ["overdue", "已逾期", summary.overdue], ["waiting", "等待回复", summary.waiting], ["bounce", "退信", summary.bounce], ["", "PI待付款", summary.pi], ["", "样品待跟进", summary.sample]
+        ].map(function (r) { return '<div class="follow-summary-card"' + (r[0] ? ' onclick="applyFollowQuick(\'' + r[0] + '\')"' : '') + '><div class="num">' + r[2] + '</div><div class="lbl">' + r[1] + '</div></div>'; }).join("");
+    }
+
+    var f = base.filter(function (x) {
+        if (time === "today") return x.dueDate === todayISO();
+        if (time === "overdue") return !!x.dueDate && x.dueDate < todayISO();
+        if (time === "week") return !!x.dueDate && x.dueDate >= startOfWeekISO() && x.dueDate <= endOfWeekISO();
+        if (time === "waiting") return !!x.isWaiting;
+        if (time === "bounce") return !!x.isBounce;
+        return true;
+    });
     var dev = f.filter(function (x) { return x.category === "development"; });
     var high = f.filter(function (x) { return x.category !== "development" && x.priority === "high"; });
     var normal = f.filter(function (x) { return x.category !== "development" && x.priority === "normal"; });
     var long = f.filter(function (x) { return x.priority === "long"; });
     var renderGroup = function (arr, id, emptyText) { var limit = 100, shown = arr.slice(0, limit); $(id).innerHTML = shown.length ? shown.map(renderFollowupItem).join("") + (arr.length > limit ? "<div class=\"follow-limit-note\">当前显示前 " + limit + " 条，共 " + arr.length + " 条。</div>" : "") : empty(emptyText); };
-    renderGroup(dev, "devFollow", "暂无到期开发提醒。");
-    renderGroup(high, "highFollow", "暂无高优先级业务跟进。");
-    renderGroup(normal, "normalFollow", "暂无正常业务跟进。");
-    renderGroup(long, "longFollow", "暂无长期维护提醒。");
+    renderGroup(dev, "devFollow", "当前筛选下暂无开发流程提醒。");
+    renderGroup(high, "highFollow", "当前筛选下暂无高优先级业务跟进。");
+    renderGroup(normal, "normalFollow", "当前筛选下暂无正常业务跟进。");
+    renderGroup(long, "longFollow", "当前筛选下暂无长期维护提醒。");
     if ($("devFollowCount")) $("devFollowCount").textContent = dev.length;
     if ($("highFollowCount")) $("highFollowCount").textContent = high.length;
     if ($("normalFollowCount")) $("normalFollowCount").textContent = normal.length;
     if ($("longFollowCount")) $("longFollowCount").textContent = long.length;
 }
+["followOwnerFilter", "followTimeFilter", "followCompanyFilter", "followCountryFilter", "followGradeFilter", "followStageFilter", "followPriorityFilter"].forEach(function (id) {
+    var el = $(id);
+    if (el) el.addEventListener("change", renderFollowups);
+});
+if ($("followSearch")) $("followSearch").addEventListener("input", renderFollowups);
 function renderRFQs() {
     var rows = state.rfqs.slice().sort(function (a, b) { return (b.requestDate || "").localeCompare(a.requestDate || ""); });
     var el = $("rfqTable");
@@ -3577,7 +3682,7 @@ document.addEventListener("click", function (e) { if (innerWidth <= 820 && !e.ta
 
 
 // ============================================================
-// V3.2.7：原生文件选择 + RFQ Excel 批量导入
+// V3.2.8：跟进中心多维筛选 + 今日/逾期/等待回复汇总
 // ============================================================
 var rfqImportRows = [];
 var rfqImportFileName = "";
