@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#4f9f68">
-  <meta name="description" content="个人AI外贸工作台 V3.2.6 免费版 云同步版">
+  <meta name="description" content="个人AI外贸工作台 V3.2.7 免费版 云同步版">
   <link rel="manifest" href="./manifest.webmanifest">
-  <title>个人AI外贸工作台 V3.2.6 免费版</title>
+  <title>个人AI外贸工作台 V3.2.7 免费版</title>
   <style>
     :root{
       --bg:#f4fbf6;--panel:#fff;--soft:#eef9f1;--primary:#4f9f68;--primary-dark:#34744c;
@@ -92,6 +92,7 @@
     .native-file-row .file-label{font-size:11px;font-weight:800;margin-bottom:7px;color:var(--primary-dark)}
     .native-file-input{display:block!important;width:100%;padding:8px;border:1px solid var(--border);border-radius:9px;background:#fff;color:var(--text)}
     .native-file-help{font-size:10px;color:var(--muted);margin-top:6px;line-height:1.6}
+    .follow-item{cursor:default}.follow-main{cursor:pointer}.follow-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #e3ece5}.follow-stage{display:inline-flex;margin-left:6px}.follow-limit-note{font-size:10px;color:var(--muted);padding:7px 2px;text-align:center}
 </style>
 </head>
 <body>
@@ -100,7 +101,7 @@
 <section id="loginScreen" class="login">
   <div class="login-card">
     <div class="big-logo">AI</div>
-    <h1>个人AI外贸工作台 V3.2.6 免费版</h1>
+    <h1>个人AI外贸工作台 V3.2.7 免费版</h1>
     <p>电脑和手机使用同一个网址。登录同一个 Google 账号后，客户、报价、PI、历史沟通、任务和附件自动同步。</p>
     <button class="btn primary" id="googleLoginBtn">使用 Google 登录</button>
     <div class="notice" style="margin-top:14px;text-align:left">
@@ -112,7 +113,7 @@
 <!-- 主应用 -->
 <div id="workspaceApp" class="app" style="display:none">
   <aside class="sidebar" id="sidebar">
-    <div class="brand"><div class="logo">AI</div><div><h1>外贸工作台 V3.2.6 免费版</h1><p>云同步 · 手机/电脑共用</p></div></div>
+    <div class="brand"><div class="logo">AI</div><div><h1>外贸工作台 V3.2.7 免费版</h1><p>云同步 · 手机/电脑共用</p></div></div>
     <nav class="nav">
       <button class="active" data-page="dashboard">🏠 首页</button>
       <button data-page="clients">👥 客户中心</button>
@@ -160,8 +161,13 @@
       </section>
 
       <section class="page" id="page-followups">
-        <div class="page-head"><div><h2>跟进中心</h2><p>自动根据报价、PI、客户跟进日期，以及多联系人开发轮换规则生成优先级。</p></div></div>
-        <div class="grid cols-3"><div class="card"><h3>🔴 高优先级</h3><div id="highFollow"></div></div><div class="card"><h3>🟠 正常跟进</h3><div id="normalFollow"></div></div><div class="card"><h3>🟢 长期维护</h3><div id="longFollow"></div></div></div>
+        <div class="page-head"><div><h2>跟进中心</h2><p>把“待开发、第1/2/最后一次开发、退信换联系人、RFQ、报价、样品、PI付款”等待办集中到这里。</p></div></div>
+        <div class="grid cols-2">
+          <div class="card"><div class="card-head"><h3>🆕 开发流程提醒</h3><span id="devFollowCount" class="badge green">0</span></div><div id="devFollow"></div></div>
+          <div class="card"><div class="card-head"><h3>🔴 业务高优先级</h3><span id="highFollowCount" class="badge red">0</span></div><div id="highFollow"></div></div>
+          <div class="card"><div class="card-head"><h3>🟠 正常跟进</h3><span id="normalFollowCount" class="badge orange">0</span></div><div id="normalFollow"></div></div>
+          <div class="card"><div class="card-head"><h3>🟢 长期维护</h3><span id="longFollowCount" class="badge green">0</span></div><div id="longFollow"></div></div>
+        </div>
       </section>
 
 
@@ -391,7 +397,7 @@
 })();
 </script>
 <!-- 主程序先加载；Excel 组件改为异步加载，避免第三方 CDN 卡住登录按钮 -->
-<script type="module" src="./app.js?v=326"></script>
+<script type="module" src="./app.js?v=327"></script>
 <script async src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
 

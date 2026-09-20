@@ -801,58 +801,92 @@ $("menuBtn").addEventListener("click", function () { return $("sidebar").classLi
 // ============================================================
 // 6. 自动跟进逻辑
 // ============================================================
+function outreachStepLabel(nextNumber, limit) {
+    nextNumber = Math.max(1, Number(nextNumber || 1));
+    limit = Math.max(1, Number(limit || 3));
+    if (nextNumber >= limit)
+        return "最后一次开发";
+    return "第" + nextNumber + "次开发";
+}
+function clientDevelopmentInfo(c) {
+    var rot = currentContactInfo(c), ct = rot.current, limit = rot.limit;
+    var status = String((c && c.status) || "");
+    var stopped = ["已回复", "有询价", "已报价", "重点跟进", "PI", "已成交", "老客户", "长期维护", "沉睡客户", "暂停开发", "无效客户"].includes(status);
+    if (stopped)
+        return { active: false, rot: rot, stage: status || "业务跟进", action: "none", actionLabel: "", dueDate: c.nextFollowUp || "" };
+    if (!ct)
+        return { active: true, rot: rot, stage: "缺少可开发邮箱", action: "edit", actionLabel: "补充邮箱", dueDate: c.nextFollowUp || todayISO(), priority: "high", note: "客户还没有可用邮箱，先补充联系人后再开始开发。" };
+    if (ct.replied)
+        return { active: false, rot: rot, stage: "客户已回复", action: "none", actionLabel: "", dueDate: c.nextFollowUp || "" };
+    if (rot.pending)
+        return { active: true, rot: rot, stage: ct.invalid ? "退信/邮箱无效" : "3次开发后仍无回复", action: "switch", actionLabel: rot.next ? "切换下一联系人" : "转沉睡客户", dueDate: todayISO(), priority: "high", note: rot.next ? (rot.reason + "，建议切换至 " + contactLabel(rot.next)) : (rot.reason + "，该公司已无更多可用联系人。") };
+    var touches = Number(ct.touchCount || 0), nextNumber = touches + 1;
+    if (touches >= limit) {
+        var waitDue = ct.nextFollowUp || c.nextFollowUp || todayISO();
+        return { active: true, rot: rot, stage: "最后一次已发送，等待回复", action: "wait", actionLabel: "等待回复", dueDate: waitDue, priority: "normal", note: "最后一次开发已发送，先等到跟进日期；届时仍无回复再切换下一联系人。" };
+    }
+    var label = outreachStepLabel(nextNumber, limit);
+    var due = touches === 0 ? (c.nextFollowUp || todayISO()) : (ct.nextFollowUp || c.nextFollowUp || addDays(ct.lastContact || todayISO(), state.settings.contactFollowDays || 3));
+    var stage = touches === 0 ? "待开发" : ("待" + label);
+    return { active: true, rot: rot, stage: stage, action: "outreach", actionLabel: label, dueDate: due, priority: (nextNumber >= limit || c.grade === "A") ? "high" : "normal", note: "当前联系人：" + contactLabel(ct) + " · 已联系 " + touches + "/" + limit + " 次" };
+}
 function getFollowups() {
     var out = [];
     var weekend = isWeekend() && !state.settings.weekendFollow;
     state.orders.forEach(function (o) {
-        if (["未付款", "部分付款"].includes(o.paymentStatus)) {
-            out.push({ type: "order", id: o.id, priority: "high", title: "".concat(clientName(o.clientId), " \u00B7 ").concat(o.piNo || "PI"), meta: "".concat(o.paymentStatus, " \u00B7 ").concat(o.amount || 0, " ").concat(o.currency || state.settings.currency) });
-        }
+        if (["未付款", "部分付款"].includes(o.paymentStatus))
+            out.push({ type: "order", id: o.id, priority: "high", category: "business", title: clientName(o.clientId) + " · " + (o.piNo || "PI"), meta: (o.paymentStatus || "待付款") + " · " + (o.amount || 0) + " " + (o.currency || state.settings.currency), stage: "PI付款" });
     });
     state.rfqs.forEach(function (r) {
         var due = r.nextFollowUp || (r.requestDate ? addDays(r.requestDate, state.settings.rfqFollowDays || 2) : "");
         if (due && due <= todayISO() && !["已全部报价", "客户取消", "已结束"].includes(r.status || "")) {
             var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
-            out.push({ type: "rfq", id: r.id, priority: overdue >= 2 ? "high" : "normal", title: "".concat(clientName(r.clientId), " \u00B7 RFQ ").concat(r.rfqNo || r.subject || "询价"), meta: "".concat(r.status || "待处理", " \u00B7 ").concat(r.itemCount || 0, "\u9879 \u00B7 ").concat(overdue ? "\u903E\u671F".concat(overdue, "\u5929") : "今天到期") });
+            out.push({ type: "rfq", id: r.id, priority: overdue >= 2 ? "high" : "normal", category: "business", title: clientName(r.clientId) + " · RFQ " + (r.rfqNo || r.subject || "询价"), meta: (r.status || "待处理") + " · " + (r.itemCount || 0) + "项 · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "RFQ处理", dueDate: due });
         }
     });
-    state.samples.forEach(function (s) {
-        var due = s.nextFollowUp || s.feedbackDueDate || s.expectedArrival || "";
-        var active = !['测试通过', '测试未通过', '已结束', '取消'].includes(s.status || '');
+    state.samples.forEach(function (smp) {
+        var due = smp.nextFollowUp || smp.feedbackDueDate || smp.expectedArrival || "";
+        var active = !["测试通过", "测试未通过", "已结束", "取消"].includes(smp.status || "");
         if (active && due && due <= todayISO()) {
             var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
-            var what = s.partNo || s.itemName || '样品';
-            var meta = "".concat(s.status || '样品跟进', " \u00B7 ").concat(overdue ? "\u903E\u671F".concat(overdue, "\u5929") : '今天到期').concat(s.tracking ? " \u00B7 ".concat(s.tracking) : '');
-            out.push({ type: 'sample', id: s.id, priority: ['已签收待测试', '测试中'].includes(s.status) ? 'high' : 'normal', title: "".concat(clientName(s.clientId), " \u00B7 \u6837\u54C1 ").concat(what), meta: meta });
+            var what = smp.partNo || smp.itemName || "样品";
+            var meta = (smp.status || "样品跟进") + " · " + (overdue ? "逾期" + overdue + "天" : "今天到期") + (smp.tracking ? " · " + smp.tracking : "");
+            out.push({ type: "sample", id: smp.id, priority: ["已签收待测试", "测试中"].includes(smp.status) ? "high" : "normal", category: "business", title: clientName(smp.clientId) + " · 样品 " + what, meta: meta, stage: "样品跟进", dueDate: due });
         }
     });
     state.quotes.forEach(function (q) {
         var due = q.nextFollowUp || (q.quoteDate ? addDays(q.quoteDate, state.settings.quoteFollowDays) : "");
         if (due && due <= todayISO() && !["成交", "丢单", "暂停"].includes(q.status)) {
             var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
-            out.push({ type: "quote", id: q.id, priority: overdue >= 5 ? "high" : "normal", title: "".concat(clientName(q.clientId), " \u00B7 ").concat(q.partNo || "报价"), meta: "".concat(q.status || "已报价", " \u00B7 ").concat(overdue ? "\u903E\u671F".concat(overdue, "\u5929") : "今天到期") });
+            out.push({ type: "quote", id: q.id, priority: overdue >= 5 ? "high" : "normal", category: "business", title: clientName(q.clientId) + " · " + (q.partNo || q.batchName || "报价"), meta: (q.status || "已报价") + " · " + (overdue ? "逾期" + overdue + "天" : "今天到期"), stage: "报价跟进", dueDate: due });
         }
     });
-    state.clients.forEach(function (c) { var rot = currentContactInfo(c); if (rot.pending) {
-        var meta0 = rot.next ? "".concat(rot.reason, " \u00B7 \u5EFA\u8BAE\u5207\u6362\u81F3 ").concat(contactLabel(rot.next)) : "".concat(rot.reason, " \u00B7 \u5DF2\u65E0\u66F4\u591A\u8054\u7CFB\u4EBA\uFF0C\u5EFA\u8BAE\u8F6C\u6C89\u7761\u5BA2\u6237");
-        var meta = "".concat(meta0, " \u00B7 ").concat(assignmentLabel(c, { email: false }));
-        out.push({ type: "client", id: c.id, priority: "high", title: c.company, meta: meta });
-    }
-    else if (c.nextFollowUp && c.nextFollowUp <= todayISO()) {
-        var long = ["长期维护", "沉睡客户"].includes(c.status);
-        var current = rot.current ? " \u00B7 \u5F53\u524D ".concat(contactLabel(rot.current), " \u00B7 ").concat(rot.current.touchCount || 0, "/").concat(rot.limit, "\u6B21") : "";
-        out.push({ type: "client", id: c.id, priority: long ? "long" : c.grade === "A" ? "high" : "normal", title: c.company, meta: "".concat(c.country || "", " \u00B7 ").concat(c.status || "").concat(current, " \u00B7 ").concat(assignmentLabel(c, { email: false })) });
-    } });
-    var rank = { high: 3, normal: 2, long: 1 }, map = new Map();
-    out.forEach(function (x) {
-        var k = x.type + ":" + x.id;
-        if (!map.has(k) || rank[x.priority] > rank[map.get(k).priority])
-            map.set(k, x);
+    state.clients.forEach(function (c) {
+        if (!c || c.status === "无效客户") return;
+        var dev = clientDevelopmentInfo(c);
+        if (dev.active) {
+            var due = dev.dueDate || todayISO();
+            if (due <= todayISO()) {
+                var overdue = Math.max(0, daysBetween(due, todayISO()) || 0);
+                var owner = assignmentLabel(c, { email: false });
+                var meta = dev.note || "";
+                if (overdue) meta += " · 逾期" + overdue + "天";
+                if (owner) meta += " · " + owner;
+                out.push({ type: "client", id: c.id, priority: dev.priority || "normal", category: "development", title: c.company, meta: meta, stage: dev.stage, action: dev.action, actionLabel: dev.actionLabel, dueDate: due });
+            }
+            return;
+        }
+        if (c.nextFollowUp && c.nextFollowUp <= todayISO()) {
+            var long = ["长期维护", "沉睡客户"].includes(c.status), rot = currentContactInfo(c);
+            var current = rot.current ? " · 当前 " + contactLabel(rot.current) : "";
+            out.push({ type: "client", id: c.id, priority: long ? "long" : c.grade === "A" ? "high" : "normal", category: long ? "long" : "business", title: c.company, meta: (c.country || "") + " · " + (c.status || "") + current + " · " + assignmentLabel(c, { email: false }), stage: long ? "长期维护" : "客户跟进", dueDate: c.nextFollowUp });
+        }
     });
-    var arr = __spreadArray([], __read(map.values()), false);
-    if (weekend)
-        arr = arr.filter(function (x) { return x.priority === "high"; });
-    return arr.sort(function (a, b) { return ({ high: 0, normal: 1, long: 2 }[a.priority] - { high: 0, normal: 1, long: 2 }[b.priority]); });
+    var rank = { high: 3, normal: 2, long: 1 }, map = new Map();
+    out.forEach(function (x) { var k = x.type + ":" + x.id; if (!map.has(k) || rank[x.priority] > rank[map.get(k).priority]) map.set(k, x); });
+    var arr = Array.from(map.values());
+    if (weekend) arr = arr.filter(function (x) { return x.priority === "high" || x.category === "development"; });
+    return arr.sort(function (a, b) { var pa = { high: 0, normal: 1, long: 2 }[a.priority], pb = { high: 0, normal: 1, long: 2 }[b.priority]; if (pa !== pb) return pa - pb; return String(a.dueDate || "").localeCompare(String(b.dueDate || "")); });
 }
 // ============================================================
 // 7. 渲染
@@ -874,13 +908,13 @@ function renderAll() {
 function renderDashboard() {
     var follow = getFollowups();
     var stats = [
-        ["今日待跟进", follow.length, "\u9AD8\u4F18\u5148\u7EA7 ".concat(follow.filter(function (x) { return x.priority === "high"; }).length)],
+        ["今日待跟进", follow.length, "待开发 " + follow.filter(function (x) { return x.category === "development"; }).length + " · 高优先 " + follow.filter(function (x) { return x.priority === "high"; }).length],
         ["RFQ / 报价", "".concat(state.rfqs.length, " / ").concat(state.quotes.length), "询价 / 报价单"],
         ["PI/订单", state.orders.length, "\u5F85\u4ED8\u6B3E ".concat(state.orders.filter(function (o) { return ["未付款", "部分付款"].includes(o.paymentStatus); }).length)],
         ["未完成任务", state.tasks.filter(function (t) { return !t.done; }).length, "实时同步"]
     ];
     $("stats").innerHTML = stats.map(function (s) { return "<div class=\"stat\"><div class=\"label\">".concat(s[0], "</div><div class=\"value\">").concat(s[1], "</div><div class=\"note\">").concat(s[2], "</div></div>"); }).join("");
-    $("todayFollowups").innerHTML = follow.length ? follow.slice(0, 8).map(function (x) { return "\n    <div class=\"item\" onclick=\"openLinked('".concat(x.type, "','").concat(x.id, "')\"><div class=\"item-title\">").concat(esc(x.title), " ").concat(badge(x.priority === "high" ? "高优先级" : x.priority === "long" ? "长期维护" : "正常", x.priority === "high" ? "red" : x.priority === "long" ? "green" : "orange"), "</div><div class=\"item-meta\">").concat(esc(x.meta), "</div></div>"); }).join("") : empty("今天没有到期跟进。");
+    $("todayFollowups").innerHTML = follow.length ? follow.slice(0, 8).map(function (x) { return "<div class=\"item\" onclick=\"openLinked('" + x.type + "','" + x.id + "')\"><div class=\"item-title\">" + esc(x.title) + " " + badge(x.stage || (x.priority === "high" ? "高优先级" : x.priority === "long" ? "长期维护" : "正常"), x.priority === "high" ? "red" : x.priority === "long" ? "green" : "orange") + "</div><div class=\"item-meta\">" + esc(x.meta) + "</div></div>"; }).join("") : empty("今天没有到期跟进。");
     var tasks = state.tasks.filter(function (t) { return !t.done && (!t.dueDate || t.dueDate <= todayISO()); }).slice(0, 8);
     $("todayTasks").innerHTML = tasks.length ? tasks.map(function (t) { return "<div class=\"item\"><div class=\"item-title\">".concat(esc(t.title), "</div><div class=\"item-meta\">").concat(t.dueDate ? fmtDate(t.dueDate) : "无日期", " \u00B7 ").concat(t.clientId ? esc(clientName(t.clientId)) : "未关联客户", "</div></div>"); }).join("") : empty("今天暂无任务。");
 }
@@ -920,12 +954,40 @@ $("clientFilter").addEventListener("input", function () { clientPage = 1; render
 $("clientStatusFilter").addEventListener("change", function () { clientPage = 1; renderClients(); });
 (_a = $("clientOwnerFilter")) === null || _a === void 0 ? void 0 : _a.addEventListener("change", function () { clientPage = 1; renderClients(); });
 (_b = $("clientOurCompanyFilter")) === null || _b === void 0 ? void 0 : _b.addEventListener("change", function () { clientPage = 1; renderClients(); });
+function followupActionHtml(x) {
+    if (x.type !== "client" || x.category !== "development") return "";
+    var c = state.clients.find(function (z) { return z.id === x.id; });
+    if (!c) return "";
+    var dev = clientDevelopmentInfo(c), rot = dev.rot || currentContactInfo(c), ct = rot.current, btns = [];
+    if (dev.action === "outreach") btns.push("<button class=\"btn small primary\" onclick=\"event.stopPropagation();recordOutreachTouch('" + c.id + "')\">" + esc(dev.actionLabel) + "</button>");
+    if (dev.action === "switch") btns.push("<button class=\"btn small danger\" onclick=\"event.stopPropagation();switchToNextContact('" + c.id + "')\">" + esc(dev.actionLabel) + "</button>");
+    if (dev.action === "edit") btns.push("<button class=\"btn small primary\" onclick=\"event.stopPropagation();openForm('client','" + c.id + "')\">补充邮箱</button>");
+    if (ct && !ct.replied && !ct.invalid) {
+        btns.push("<button class=\"btn small\" onclick=\"event.stopPropagation();recordCurrentContactReply('" + c.id + "')\">客户已回复</button>");
+        btns.push("<button class=\"btn small danger\" onclick=\"event.stopPropagation();markCurrentContactInvalid('" + c.id + "')\">退信/不存在</button>");
+    }
+    if (dev.action !== "edit" && dev.action !== "switch") btns.push("<button class=\"btn small\" onclick=\"event.stopPropagation();postponeClientFollowup('" + c.id + "')\">延后</button>");
+    return btns.length ? "<div class=\"follow-actions\">" + btns.join("") + "</div>" : "";
+}
+function renderFollowupItem(x) {
+    var stage = x.stage ? " <span class=\"badge follow-stage " + (x.priority === "high" ? "red" : x.priority === "long" ? "green" : "orange") + "\">" + esc(x.stage) + "</span>" : "";
+    return "<div class=\"item follow-item\"><div class=\"follow-main\" onclick=\"openLinked('" + x.type + "','" + x.id + "')\"><div class=\"item-title\">" + esc(x.title) + stage + "</div><div class=\"item-meta\">" + esc(x.meta) + "</div></div>" + followupActionHtml(x) + "</div>";
+}
 function renderFollowups() {
     var f = getFollowups();
-    var html = function (x) { return "<div class=\"item\" onclick=\"openLinked('".concat(x.type, "','").concat(x.id, "')\"><div class=\"item-title\">").concat(esc(x.title), "</div><div class=\"item-meta\">").concat(esc(x.meta), "</div></div>"); };
-    $("highFollow").innerHTML = f.filter(function (x) { return x.priority === "high"; }).map(html).join("") || empty("暂无");
-    $("normalFollow").innerHTML = f.filter(function (x) { return x.priority === "normal"; }).map(html).join("") || empty("暂无");
-    $("longFollow").innerHTML = f.filter(function (x) { return x.priority === "long"; }).map(html).join("") || empty("暂无");
+    var dev = f.filter(function (x) { return x.category === "development"; });
+    var high = f.filter(function (x) { return x.category !== "development" && x.priority === "high"; });
+    var normal = f.filter(function (x) { return x.category !== "development" && x.priority === "normal"; });
+    var long = f.filter(function (x) { return x.priority === "long"; });
+    var renderGroup = function (arr, id, emptyText) { var limit = 100, shown = arr.slice(0, limit); $(id).innerHTML = shown.length ? shown.map(renderFollowupItem).join("") + (arr.length > limit ? "<div class=\"follow-limit-note\">当前显示前 " + limit + " 条，共 " + arr.length + " 条。</div>" : "") : empty(emptyText); };
+    renderGroup(dev, "devFollow", "暂无到期开发提醒。");
+    renderGroup(high, "highFollow", "暂无高优先级业务跟进。");
+    renderGroup(normal, "normalFollow", "暂无正常业务跟进。");
+    renderGroup(long, "longFollow", "暂无长期维护提醒。");
+    if ($("devFollowCount")) $("devFollowCount").textContent = dev.length;
+    if ($("highFollowCount")) $("highFollowCount").textContent = high.length;
+    if ($("normalFollowCount")) $("normalFollowCount").textContent = normal.length;
+    if ($("longFollowCount")) $("longFollowCount").textContent = long.length;
 }
 function renderRFQs() {
     var rows = state.rfqs.slice().sort(function (a, b) { return (b.requestDate || "").localeCompare(a.requestDate || ""); });
@@ -1312,12 +1374,12 @@ function updateClientOutreachFromCommunication(obj_1) {
                             ct.noReplyCount = (ct.noReplyCount || 0) + 1;
                             ct.lastContact = obj.date || todayISO();
                             ct.nextFollowUp = obj.nextFollowUp || addDays(ct.lastContact, gap);
-                            ct.status = ct.noReplyCount >= limit ? "".concat(limit, "\u6B21\u672A\u56DE\u590D") : "开发中";
+                            ct.status = ct.noReplyCount >= limit ? "最后一次已发送" : "开发中";
                             contacts[idx] = ct;
                             updates.contacts = contacts;
                             updates.currentContactEmail = ct.email;
-                            updates.contactRotationStatus = ct.noReplyCount >= limit ? "waiting_switch" : "active";
-                            updates.nextFollowUp = ct.noReplyCount >= limit ? (obj.date || todayISO()) : ct.nextFollowUp;
+                            updates.contactRotationStatus = "active";
+                            updates.nextFollowUp = ct.nextFollowUp;
                             if (["新客户", ""].includes(c.status || ""))
                                 updates.status = "已开发";
                         }
@@ -1369,10 +1431,10 @@ window.recordOutreachTouch = function (clientId) { return __awaiter(void 0, void
                 return [2 /*return*/];
             }
             n = (info.current.touchCount || 0) + 1, next = addDays(todayISO(), Math.max(1, Number(state.settings.contactFollowDays || 3)));
-            if (!confirm("\u8BB0\u5F55\u4E00\u6B21\u5F00\u53D1\u90AE\u4EF6\uFF1F\n\n\u5F53\u524D\u8054\u7CFB\u4EBA\uFF1A".concat(contactLabel(info.current), "\n\u672C\u6B21\u5C06\u8BB0\u4E3A\u7B2C ").concat(n, " \u6B21\u8054\u7CFB\u3002")))
+            if (!confirm("记录" + outreachStepLabel(n, info.limit) + "？\n\n当前联系人：" + contactLabel(info.current) + "\n发送后系统将在 " + (state.settings.contactFollowDays || 3) + " 天后继续提醒；最后一次发送后也会先等待回复，不会立即切换联系人。"))
                 return [2 /*return*/];
             sync("busy", "正在记录开发…");
-            a = clientAssignment(c), obj = { clientId: clientId, date: todayISO(), channel: "Email", direction: "我联系客户", contactEmail: info.current.email, ownerSalesperson: a.salesperson, ownerCompany: a.company, ownerEmail: a.email, subject: "\u5F00\u53D1\u90AE\u4EF6 \u00B7 \u7B2C".concat(n, "\u6B21"), content: "\u5DF2\u5411 ".concat(info.current.email, " \u53D1\u9001\u7B2C ").concat(n, " \u6B21\u5F00\u53D1/\u8DDF\u8FDB\u90AE\u4EF6\uFF0C\u6682\u672A\u6536\u5230\u56DE\u590D\u3002"), nextAction: "等待回复", nextFollowUp: next };
+            a = clientAssignment(c), obj = { clientId: clientId, date: todayISO(), channel: "Email", direction: "我联系客户", contactEmail: info.current.email, ownerSalesperson: a.salesperson, ownerCompany: a.company, ownerEmail: a.email, subject: outreachStepLabel(n, info.limit), content: "已向 " + info.current.email + " 发送" + outreachStepLabel(n, info.limit) + "邮件，等待客户回复。", nextAction: n >= info.limit ? "等待最后一次开发回复；到期仍无回复则切换下一联系人" : outreachStepLabel(n + 1, info.limit), nextFollowUp: next };
             return [4 /*yield*/, addDoc(refCollection("communications"), __assign(__assign({}, obj), { createdAt: serverTimestamp(), updatedAt: serverTimestamp() }))];
         case 1:
             _a.sent();
@@ -1463,6 +1525,40 @@ window.markContactInvalid = function (clientId, encodedEmail) { return __awaiter
             return [2 /*return*/];
     }
 }); }); };
+window.markCurrentContactInvalid = function (clientId) {
+    var c = state.clients.find(function (x) { return x.id === clientId; });
+    if (!c) return;
+    var rot = currentContactInfo(c);
+    if (!rot.current) { alert("这个客户没有可标记的当前邮箱。"); return; }
+    return markContactInvalid(clientId, encodeURIComponent(rot.current.email));
+};
+window.recordCurrentContactReply = function (clientId) {
+    var c = state.clients.find(function (x) { return x.id === clientId; });
+    if (!c) return;
+    var rot = currentContactInfo(c);
+    if (!rot.current) { alert("这个客户没有当前联系人。"); return; }
+    openContactCommunication(clientId, encodeURIComponent(rot.current.email), "客户回复");
+};
+window.postponeClientFollowup = function (clientId) { return __awaiter(void 0, void 0, void 0, function () {
+    var c, days, due, contacts, rot, idx;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                c = state.clients.find(function (x) { return x.id === clientId; });
+                if (!c) return [2 /*return*/];
+                days = Number(prompt("延后几天提醒？\n\n例如输入 3，表示 3 天后重新出现在跟进中心。", "3"));
+                if (!Number.isFinite(days) || days < 1 || days > 365) return [2 /*return*/];
+                due = addDays(todayISO(), Math.floor(days));
+                contacts = getClientContacts(c, { includeNotes: true }).map(function (x) { return (__assign({}, x)); });
+                rot = currentContactInfo(c);
+                idx = rot.current ? contacts.findIndex(function (x) { return x.email.toLowerCase() === rot.current.email.toLowerCase(); }) : -1;
+                if (idx >= 0) contacts[idx].nextFollowUp = due;
+                return [4 /*yield*/, updateDoc(doc(db, "users", currentUser.uid, "clients", clientId), { contacts: contacts, nextFollowUp: due, updatedAt: serverTimestamp() })];
+            case 1:
+                _a.sent(); sync("ok", "已延后到 " + due); return [2 /*return*/];
+        }
+    });
+}); };
 window.openContactCommunication = function (clientId, encodedEmail, direction) {
     if (direction === void 0) { direction = "我联系客户"; }
     var email = decodeURIComponent(encodedEmail || "");
@@ -2005,9 +2101,11 @@ function currentContactInfo(c) {
         return i !== idx && !x.invalid && !x.replied && (x.noReplyCount || 0) < limit;
     });
     var next = (candidates.find(function (z) { return z.i > idx; }) || candidates[0] || {}).x || null;
-    var pending = !current.replied && (current.invalid || (current.noReplyCount || 0) >= limit);
+    var finalDue = current.nextFollowUp || c.nextFollowUp || "";
+    var finalWaitDone = !finalDue || finalDue <= todayISO();
+    var pending = !current.replied && (current.invalid || ((current.noReplyCount || 0) >= limit && finalWaitDone));
     var allDone = pending && !next;
-    var reason = current.invalid ? "邮箱无效/退信" : ((current.noReplyCount || 0) >= limit ? "\u8FDE\u7EED ".concat(limit, " \u6B21\u672A\u56DE\u590D") : "");
+    var reason = current.invalid ? "邮箱无效/退信" : ((current.noReplyCount || 0) >= limit ? "连续 ".concat(limit, " 次开发后仍无回复") : "");
     return { contacts: contacts, current: current, index: idx, next: next, pending: pending, reason: reason, allDone: allDone, limit: limit };
 }
 function contactLabel(x) { return x ? (x.name ? "".concat(x.name, " \u00B7 ").concat(x.email) : x.email) : "—"; }
@@ -3465,7 +3563,7 @@ function localAnswer(q) {
 // 14. 帮助、弹窗、PWA
 // ============================================================
 var helpText = {
-    followups: "首页会综合 RFQ、报价、样品、PI付款状态、联系人轮换和客户下次跟进日期自动排序。",
+    followups: "跟进中心会单独提示待开发、第1次/第2次/最后一次开发、退信无效、3次无回复换联系人，以及 RFQ、报价、样品、PI付款等到期事项。",
     tasks: "任务中心用于管理每日开发、WhatsApp、Facebook 和客户跟进任务。",
     files: "V3 免费版不使用 Firebase Storage。把 PI、报价、Datasheet、图片等上传到 Google Drive / OneDrive / WPS 云盘，再把共享链接保存到客户档案，链接会在电脑和手机之间自动同步。",
 };
@@ -3479,7 +3577,7 @@ document.addEventListener("click", function (e) { if (innerWidth <= 820 && !e.ta
 
 
 // ============================================================
-// V3.2.6：原生文件选择 + RFQ Excel 批量导入
+// V3.2.7：原生文件选择 + RFQ Excel 批量导入
 // ============================================================
 var rfqImportRows = [];
 var rfqImportFileName = "";
