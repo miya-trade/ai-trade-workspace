@@ -3476,3 +3476,185 @@ document.querySelectorAll(".modal-bg").forEach(function (x) { return x.addEventL
 document.addEventListener("click", function (e) { if (innerWidth <= 820 && !e.target.closest(".sidebar") && !e.target.closest("#menuBtn"))
     $("sidebar").classList.remove("open"); });
 // V3.2.4 老电脑兼容版：暂不注册 Service Worker，避免旧缓存影响登录与升级。
+
+
+// ============================================================
+// V3.2.6：原生文件选择 + RFQ Excel 批量导入
+// ============================================================
+var rfqImportRows = [];
+var rfqImportFileName = "";
+
+var rfqAliases326 = {
+    company: ["客户", "客户名称", "公司", "公司名称", "customer", "client", "company", "company name"],
+    email: ["邮箱", "电子邮箱", "email", "e-mail"],
+    partNo: ["型号", "料号", "物料号", "产品型号", "part no", "part no.", "part number", "mpn", "pn", "p/n", "model"],
+    brand: ["品牌", "厂家", "制造商", "brand", "manufacturer", "mfr"],
+    qty: ["数量", "需求数量", "采购数量", "qty", "quantity", "q'ty"],
+    targetPrice: ["目标价", "目标价格", "target price", "target", "tp"],
+    requiredDate: ["要求日期", "需求日期", "交期要求", "要求交期", "need date", "required date", "delivery date", "required delivery"],
+    description: ["描述", "规格", "品名", "产品描述", "description", "desc", "spec", "specification"],
+    notes: ["备注", "说明", "note", "notes", "remark", "remarks"]
+};
+var rfqAliasLookup326 = (function () {
+    var m = new Map();
+    Object.keys(rfqAliases326).forEach(function (f) {
+        rfqAliases326[f].forEach(function (x) { m.set(normalizeHeader(x), f); });
+    });
+    return m;
+})();
+function rfqFieldForHeader326(h) { return rfqAliasLookup326.get(normalizeHeader(h)) || null; }
+function detectRfqHeaderRow326(matrix) {
+    var best = { idx: 0, score: -1, fields: [] };
+    for (var i = 0; i < Math.min(matrix.length, 20); i++) {
+        var fields = (matrix[i] || []).map(rfqFieldForHeader326).filter(Boolean);
+        var score = fields.length + (fields.indexOf("partNo") >= 0 ? 6 : 0) + (fields.indexOf("qty") >= 0 ? 2 : 0) + (fields.indexOf("brand") >= 0 ? 1 : 0);
+        if (score > best.score) best = { idx: i, score: score, fields: fields };
+    }
+    return best;
+}
+function rowToRfqItem326(headers, row) {
+    var o = {};
+    headers.forEach(function (h, i) {
+        var f = rfqFieldForHeader326(h);
+        if (f && row[i] !== undefined && row[i] !== null && String(row[i]).trim() !== "") o[f] = String(row[i]).trim();
+    });
+    o.partNo = String(o.partNo || "").trim();
+    o.brand = String(o.brand || "").trim();
+    o.qty = String(o.qty || "").trim();
+    return o;
+}
+function fillRfqClientOptions326() {
+    var sel = $("rfqImportClient");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">请选择客户</option>' + state.clients.slice().sort(function (a, b) { return (a.company || "").localeCompare(b.company || ""); }).map(function (c) {
+        return '<option value="' + esc(c.id) + '">' + esc(c.company) + (c.country ? ' · ' + esc(c.country) : '') + '</option>';
+    }).join("");
+}
+function resetRfqImport326() {
+    rfqImportRows = [];
+    rfqImportFileName = "";
+    fillRfqClientOptions326();
+    if ($("rfqImportDate")) $("rfqImportDate").value = todayISO();
+    if ($("rfqImportNo")) $("rfqImportNo").value = "";
+    if ($("rfqFileInput")) $("rfqFileInput").value = "";
+    if ($("rfqImportStatus")) $("rfqImportStatus").textContent = "尚未选择文件。";
+    if ($("rfqImportSummary")) $("rfqImportSummary").innerHTML = "";
+    if ($("rfqImportPreview")) $("rfqImportPreview").innerHTML = "";
+    if ($("rfqImportBtn")) $("rfqImportBtn").disabled = true;
+}
+function waitForXlsx326(timeoutMs) {
+    return new Promise(function (resolve, reject) {
+        if (window.XLSX) { resolve(window.XLSX); return; }
+        var started = Date.now();
+        var timer = setInterval(function () {
+            if (window.XLSX) { clearInterval(timer); resolve(window.XLSX); return; }
+            if (Date.now() - started >= timeoutMs) { clearInterval(timer); reject(new Error("Excel解析组件尚未加载完成。请保持联网，等待几秒后重新选择文件；也可以把 Excel 另存为 CSV 后导入。")); }
+        }, 250);
+    });
+}
+async function readRfqExcelFile326(file) {
+    var status = $("rfqImportStatus");
+    try {
+        var name = (file.name || "").toLowerCase();
+        if (!/\.(xlsx|xls|csv)$/.test(name)) throw new Error("只支持 .xlsx / .xls / .csv 文件。");
+        rfqImportFileName = file.name || "询价表";
+        status.textContent = "正在读取询价表……";
+        var matrix = [];
+        if (name.endsWith(".csv")) {
+            var text = await file.text();
+            if (window.XLSX) {
+                var wb0 = XLSX.read(text, { type: "string" });
+                matrix = XLSX.utils.sheet_to_json(wb0.Sheets[wb0.SheetNames[0]], { header: 1, defval: "", raw: false, blankrows: false });
+            } else {
+                matrix = text.split(/\r?\n/).filter(Boolean).map(function (line) { return line.split(","); });
+            }
+        } else {
+            await waitForXlsx326(8000);
+            var data = await file.arrayBuffer();
+            var wb = XLSX.read(data, { type: "array", cellDates: true });
+            var ws = wb.Sheets[wb.SheetNames[0]];
+            matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false, blankrows: false });
+        }
+        if (!matrix.length) throw new Error("询价表为空。");
+        var detected = detectRfqHeaderRow326(matrix);
+        var headers = (matrix[detected.idx] || []).map(function (x) { return String(x || "").trim(); });
+        var fields = headers.map(rfqFieldForHeader326).filter(Boolean);
+        if (fields.indexOf("partNo") < 0) throw new Error("没有识别到“型号 / 料号 / Part No / MPN”列。");
+        var rows = matrix.slice(detected.idx + 1).map(function (r) { return rowToRfqItem326(headers, r); }).filter(function (x) { return x.partNo || x.notes || x.description; });
+        if (!rows.length) throw new Error("没有读取到有效询价行。");
+        var bytes = new Blob([JSON.stringify(rows)]).size;
+        if (rows.length > 800 || bytes > 700000) throw new Error("这张询价表数据较大（" + rows.length + " 行）。为了避免超过云端单条记录限制，请拆成两张 Excel 再导入。");
+        rfqImportRows = rows;
+        status.textContent = "已读取 " + file.name + "：识别表头在第 " + (detected.idx + 1) + " 行，共 " + rows.length + " 个型号。";
+        var brands = {};
+        var withQty = 0;
+        rows.forEach(function (x) { if (x.brand) brands[x.brand] = 1; if (x.qty) withQty++; });
+        $("rfqImportSummary").innerHTML = '<div><b>' + rows.length + '</b><br><span class="item-meta">询价型号数</span></div><div><b>' + withQty + '</b><br><span class="item-meta">有数量</span></div><div><b>' + Object.keys(brands).length + '</b><br><span class="item-meta">品牌数</span></div><div><b>' + fields.length + '</b><br><span class="item-meta">识别字段</span></div>';
+        $("rfqImportPreview").innerHTML = '<div class="table-wrap"><table><thead><tr><th>型号</th><th>品牌</th><th>数量</th><th>目标价</th><th>需求日期</th><th>描述/备注</th></tr></thead><tbody>' + rows.slice(0, 10).map(function (x) {
+            return '<tr><td><b>' + esc(x.partNo || '') + '</b></td><td>' + esc(x.brand || '') + '</td><td>' + esc(x.qty || '') + '</td><td>' + esc(x.targetPrice || '') + '</td><td>' + esc(x.requiredDate || '') + '</td><td>' + esc(x.description || x.notes || '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' + (rows.length > 10 ? '<div class="item-meta" style="margin-top:6px">仅预览前 10 行，共 ' + rows.length + ' 行。</div>' : '');
+        $("rfqImportBtn").disabled = false;
+    } catch (err) {
+        rfqImportRows = [];
+        $("rfqImportBtn").disabled = true;
+        $("rfqImportPreview").innerHTML = "";
+        $("rfqImportSummary").innerHTML = "";
+        status.textContent = "读取失败：" + (err && err.message ? err.message : String(err));
+    }
+}
+
+(function initV326Imports() {
+    var openBtn = $("openRfqImportBtn");
+    if (openBtn) openBtn.addEventListener("click", function () { resetRfqImport326(); $("rfqImportModal").classList.add("show"); });
+    var input = $("rfqFileInput");
+    if (input) input.addEventListener("change", function (e) { var f = e.target.files && e.target.files[0]; if (f) readRfqExcelFile326(f); });
+    var drop = $("rfqDropZone");
+    if (drop) {
+        ["dragenter", "dragover"].forEach(function (evt) { drop.addEventListener(evt, function (e) { e.preventDefault(); e.stopPropagation(); drop.classList.add("dragover"); }); });
+        ["dragleave", "drop"].forEach(function (evt) { drop.addEventListener(evt, function (e) { e.preventDefault(); e.stopPropagation(); drop.classList.remove("dragover"); }); });
+        drop.addEventListener("drop", function (e) { var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readRfqExcelFile326(f); });
+    }
+    var importBtn = $("rfqImportBtn");
+    if (importBtn) importBtn.addEventListener("click", async function () {
+        try {
+            if (!rfqImportRows.length) return;
+            var clientId = $("rfqImportClient").value;
+            if (!clientId) { alert("请先选择这张询价表属于哪个客户。"); return; }
+            var requestDate = $("rfqImportDate").value || todayISO();
+            var title = String($("rfqImportNo").value || "").trim();
+            if (!title) title = rfqImportFileName.replace(/\.(xlsx|xls|csv)$/i, "") || ("RFQ " + requestDate);
+            importBtn.disabled = true;
+            importBtn.textContent = "正在导入……";
+            var parts = rfqImportRows.slice(0, 30).map(function (x) { return x.partNo; }).filter(Boolean).join(", ");
+            await addDoc(refCollection("rfqs"), {
+                clientId: clientId,
+                rfqNo: title,
+                subject: title,
+                requestDate: requestDate,
+                itemCount: rfqImportRows.length,
+                items: rfqImportRows,
+                parts: parts,
+                sourceFile: rfqImportFileName,
+                status: "待报价",
+                customerNeed: "Excel批量导入，共 " + rfqImportRows.length + " 个型号",
+                nextFollowUp: addDays(requestDate, state.settings.rfqFollowDays || 2),
+                notes: "Excel批量导入询价：" + rfqImportFileName,
+                batchImport: true,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+            });
+            closeModal("rfqImportModal");
+            alert("询价导入成功：" + rfqImportRows.length + " 个型号已保存为 1 个 RFQ。客户页面只显示摘要，不会铺满几百行。");
+        } catch (err) {
+            alert("询价导入失败：" + (err && err.message ? err.message : String(err)));
+        } finally {
+            if (importBtn) { importBtn.disabled = false; importBtn.textContent = "导入询价到云端"; }
+        }
+    });
+
+    // 老电脑提示：实际文件选择使用浏览器原生 input，不再依赖点击白框。
+    var qInput = $("quoteFileInput");
+    if (qInput) qInput.title = "点击浏览电脑并选择报价 Excel";
+    var cInput = $("excelFileInput");
+    if (cInput) cInput.title = "点击浏览电脑并选择客户 Excel";
+})();
