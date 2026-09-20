@@ -1,4 +1,4 @@
-const CACHE="ai-trade-workspace-v322-static-v1";
+const CACHE="ai-trade-workspace-v323-static-v1";
 const ASSETS=["./","./index.html","./app.js","./firebase-config.js","./manifest.webmanifest","./icon.svg"];
 self.addEventListener("install",event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).catch(()=>{}));
